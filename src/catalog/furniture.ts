@@ -74,6 +74,7 @@ const EXTRA_DIMS: Record<string, [number, number, number]> = {
   rocking_chair: [75, 85, 100], folding_screen: [130, 40, 160], horse_statue: [60, 45, 150], marble_bust: [50, 50, 160],
   mantel_clock: [50, 40, 115], lantern: [40, 40, 120], mirror: [70, 12, 180], gargoyle: [160, 160, 180],
   globe: [60, 60, 110], lamp: [40, 40, 160], clock: [50, 35, 210], urn: [60, 60, 100], crystal: [50, 50, 60],
+  otter: [110, 40, 40],
   telescope: [70, 70, 150], easel: [70, 60, 170], skeleton: [50, 40, 170], suit_armor: [60, 50, 190], cauldron: [80, 80, 70],
 };
 const PLINTH = (w: number, h: number, d: number, top: Builder): Part[] => [box(0, h / 2, 0, w, h, d, '#e3ddd1'), ...top(w, h, d).map((p) => ({ ...p, p: [p.p[0], p.p[1] + h, p.p[2]] as [number, number, number] }))];
@@ -96,6 +97,15 @@ const EXTRA_BUILDERS: Record<string, [string, string, Builder]> = {
   skeleton: ['Skeleton', 'Memory props', (_w, h) => [cyl(0, h * 0.35, 0, 0.06, h * 0.7, WHITE), box(0, h * 0.65, 0, 0.36, 0.3, 0.12, WHITE), ball(0, h - 0.12, 0, 0.12, WHITE)]],
   suit_armor: ['Suit of armor', 'Memory props', (w, h, d) => [box(0, h * 0.3, 0, w * 0.6, h * 0.6, d * 0.6, STEEL), box(0, h * 0.72, 0, w, h * 0.3, d * 0.8, STEEL), ball(0, h - 0.13, 0, 0.14, STEEL)]],
   cauldron: ['Cauldron', 'Memory props', (w, h) => [ball(0, h / 2, 0, w / 2, BLACK), cyl(0, h - 0.05, 0, w * 0.8, 0.04, '#5fae4f')]],
+  // Faces +x (its long side runs along x). Placed near a river or pond, it swims there.
+  otter: ['River otter', 'Animals', () => [
+    { s: 'sphere', p: [0, 0.14, 0], z: [0.62, 0.22, 0.26], c: '#5a3f2b' },
+    { s: 'sphere', p: [0.04, 0.1, 0], z: [0.5, 0.12, 0.2], c: '#a98a6a' },
+    { s: 'sphere', p: [-0.42, 0.12, 0], z: [0.38, 0.07, 0.11], c: '#4a3322' },
+    ball(0.36, 0.2, 0, 0.1, '#5a3f2b'), ball(0.45, 0.19, 0, 0.05, '#c8b08f'),
+    ball(0.49, 0.2, 0, 0.02, BLACK), ball(0.39, 0.25, 0.05, 0.018, BLACK), ball(0.39, 0.25, -0.05, 0.018, BLACK),
+    ball(0.33, 0.29, 0.07, 0.025, '#4a3322'), ball(0.33, 0.29, -0.07, 0.025, '#4a3322'),
+  ]],
 };
 
 export const CATALOG: Record<string, CatalogItem> = {};
@@ -107,6 +117,9 @@ for (const [id, [label, group, build]] of Object.entries(EXTRA_BUILDERS)) {
   const dims = EXTRA_DIMS[id];
   CATALOG[id] = { id, label, group, dims, parts: build(dims[0] / 100, dims[2] / 100, dims[1] / 100) };
 }
+
+/** Items drawn and animated by the scene (e.g. otters swimming), not baked into level meshes. */
+export const ANIMATED_CATS = new Set(['otter']);
 
 export const CATALOG_GROUPS = [...new Set(Object.values(CATALOG).map((c) => c.group))];
 

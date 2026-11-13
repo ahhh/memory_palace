@@ -6,11 +6,10 @@ import type { PalaceDoc, V2, V3 } from '../model/schema';
 import { useStore } from '../editor/store';
 import { useActiveLevel, useBounds, useHeightFn } from './hooks';
 import { buildColliders, groundAt, levelAtHeight, resolve, type Seg } from '../walk/collision';
-import { anchorNode, OUT, roomGraph, routeBetween } from '../journey/graph';
+import { EYE, anchorViewpoint, tourRoute } from '../journey/tour';
 import { camBus, isTouchDevice } from './bus';
 import { doorLinks } from '../model/queries';
 
-const EYE = 1.6;
 
 const CAM_KEYS = new Set(['Home', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyQ', 'KeyE', 'Equal', 'NumpadAdd', 'Minus', 'NumpadSubtract', 'ShiftLeft', 'ShiftRight']);
 
@@ -167,32 +166,6 @@ function ExploreCamera() {
 }
 
 /** A spot ~1.5 m in front of an anchor (toward where you approach it from) at eye height. */
-export function anchorViewpoint(doc: PalaceDoc, id: string, segs: Seg[]): { eye: V3; look: V3 } | null {
-  const a = doc.anchors[id];
-  const lv = a && doc.levels[a.level];
-  if (!a || !lv) return null;
-  const look: V3 = [a.pos[0], lv.elevation + a.pos[1], a.pos[2]];
-  const r = (a.facing * Math.PI) / 180;
-  const back: V2 = [-Math.cos(r), -Math.sin(r)];
-  for (const k of [1.8, 1.4, 1.0, 0.6]) {
-    const p: V2 = [a.pos[0] + back[0] * k, a.pos[2] + back[1] * k];
-    const blocked = segs.some((s) => s.y0 <= lv.elevation + 1 && s.y1 >= lv.elevation + 1 && s.r > 0.03 && segIntersect([a.pos[0], a.pos[2]], p, s.a, s.b));
-    if (!blocked) {
-      const fixed = resolve(p, 0.25, lv.elevation, segs);
-      return { eye: [fixed[0], lv.elevation + EYE, fixed[1]], look };
-    }
-  }
-  return { eye: [a.pos[0] + back[0] * 0.5, lv.elevation + EYE, a.pos[2] + back[1] * 0.5], look };
-}
-
-function segIntersect(p1: V2, p2: V2, p3: V2, p4: V2) {
-  const d = (p2[0] - p1[0]) * (p4[1] - p3[1]) - (p2[1] - p1[1]) * (p4[0] - p3[0]);
-  if (Math.abs(d) < 1e-9) return false;
-  const t = ((p3[0] - p1[0]) * (p4[1] - p3[1]) - (p3[1] - p1[1]) * (p4[0] - p3[0])) / d;
-  const u = ((p3[0] - p1[0]) * (p2[1] - p1[1]) - (p3[1] - p1[1]) * (p2[0] - p1[0])) / d;
-  return t > 0 && t < 1 && u > 0 && u < 1;
-}
-
 function useColliders() {
   const walls = useStore((s) => s.doc.walls);
   const openings = useStore((s) => s.doc.openings);
@@ -370,7 +343,11 @@ function TourCamera() {
   const doc = useStore((s) => s.doc);
   const idx = useStore((s) => s.ui.tourIndex);
   const segs = useColliders();
-  const anim = useRef<{ curve: THREE.CatmullRomCurve3; t: number; dur: number; look: THREE.Vector3; startLook: THREE.Vector3 } | null>(null);
+  // A move is a walk along `curve` looking ahead, then (walking tours) a turn to the anchor.
+  const anim = useRef<{
+    curve: THREE.CatmullRomCurve3; t: number; dur: number; turn: number; walking: boolean;
+    look: THREE.Vector3; startLook: THREE.Vector3; heading: THREE.Vector3;
+  } | null>(null);
   const prevIdx = useRef<number | null>(null);
   const curLook = useRef(new THREE.Vector3());
 
@@ -382,19 +359,17 @@ function TourCamera() {
     if (!vp) return;
     const pts: THREE.Vector3[] = [camera.position.clone()];
     const from = prevIdx.current !== null && prevIdx.current !== idx ? doc.journey[prevIdx.current] : null;
-    if (from) {
-      const g = roomGraph(doc);
-      const a = anchorNode(doc, from), b = anchorNode(doc, id);
-      if (a !== OUT || b !== OUT) for (const w of routeBetween(g, a, b)) pts.push(new THREE.Vector3(w[0], w[1] + EYE, w[2]));
-    }
+    // Through the doorways, into the room's viewing spot (near its center), then turn to look.
+    if (from) for (const w of tourRoute(doc, from, id)) pts.push(new THREE.Vector3(w[0], w[1] + EYE, w[2]));
     pts.push(new THREE.Vector3(...vp.eye));
     // Drop near-duplicate points (Catmull-Rom dislikes them).
     const clean = pts.filter((p, i) => i === 0 || p.distanceTo(pts[i - 1]) > 0.2);
     if (clean.length < 2) clean.push(new THREE.Vector3(...vp.eye).add(new THREE.Vector3(0, 0.01, 0)));
     const curve = new THREE.CatmullRomCurve3(clean, false, 'centripetal');
-    const dur = from ? Math.max(1.2, Math.min(7, curve.getLength() / 2.4)) : Math.max(1.5, Math.min(3.5, curve.getLength() / 12));
+    const dur = from ? Math.max(1.2, Math.min(9, curve.getLength() / 2.4)) : Math.max(1.5, Math.min(3.5, curve.getLength() / 12));
     const startLook = curLook.current.lengthSq() > 0 ? curLook.current.clone() : new THREE.Vector3(...vp.look);
-    anim.current = { curve, t: 0, dur, look: new THREE.Vector3(...vp.look), startLook };
+    const turn = from ? 0.9 : 0;
+    anim.current = { curve, t: 0, dur, turn, walking: !!from, look: new THREE.Vector3(...vp.look), startLook, heading: startLook.clone() };
     prevIdx.current = idx;
      
   }, [idx, doc.journey]);
@@ -403,16 +378,27 @@ function TourCamera() {
     const a = anim.current;
     const camera = cam.current;
     if (!a || !camera) return;
-    a.t = Math.min(1, a.t + dt / a.dur);
-    const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - (-2 * a.t + 2) ** 2 / 2;
+    a.t = Math.min(a.dur + a.turn, a.t + dt);
+    const u = Math.min(1, a.t / a.dur);
+    const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
     const p = a.curve.getPointAt(e);
     camera.position.copy(p);
-    const ahead = a.curve.getPointAt(Math.min(1, e + 0.05));
-    const dir = ahead.clone().sub(p).setY(0);
-    const tangentLook = dir.lengthSq() > 1e-6 ? ahead.clone().add(dir.normalize().multiplyScalar(2)) : a.look.clone();
-    const w = Math.min(1, Math.max(0, (e - 0.55) / 0.4));
-    const base = a.t < 0.15 ? a.startLook.clone().lerp(tangentLook, a.t / 0.15) : tangentLook;
-    curLook.current.copy(base.lerp(a.look, w));
+    if (!a.walking) {
+      // First stop: fly in from the overview, settling onto the anchor.
+      const w = Math.min(1, Math.max(0, (e - 0.55) / 0.4));
+      curLook.current.copy(a.startLook.clone().lerp(a.look, w));
+    } else if (a.t < a.dur) {
+      // Walking: look where we're going (eased in from the previous view).
+      const ahead = a.curve.getPointAt(Math.min(1, e + 0.04));
+      const dir = ahead.clone().sub(p).setY(0);
+      if (dir.lengthSq() > 1e-6) a.heading.copy(p).add(dir.normalize().multiplyScalar(2)).setY(p.y);
+      curLook.current.copy(u < 0.15 ? a.startLook.clone().lerp(a.heading, u / 0.15) : a.heading);
+    } else {
+      // Arrived at the viewing spot: now turn to the anchor.
+      const k = Math.min(1, (a.t - a.dur) / a.turn);
+      const s = k * k * (3 - 2 * k);
+      curLook.current.copy(a.heading.clone().lerp(a.look, s));
+    }
     camera.lookAt(curLook.current);
   });
 

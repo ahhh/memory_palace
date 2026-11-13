@@ -1,26 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import type { StyleId } from '../model/schema';
 import { useStore } from '../editor/store';
-import { LATEST, SYMMETRIC_DEFAULT, generate, paramsFor } from '../gen/registry';
+import { LATEST, SYMMETRIC_DEFAULT, generate, paramsFor, symmetricApplies } from '../gen/registry';
 import { sanitizeSeed } from '../share/recipeString';
 import { decodeShare, encodeShare, shareUrl } from '../share/codec';
 import { deleteFromLibrary, listLibrary, loadFromLibrary, newLibraryId, saveToLibrary, type LibraryEntry } from '../library/storage';
 import { emptyDoc } from '../model/defaults';
 
 const STYLES: { id: StyleId; name: string; blurb: string }[] = [
-  { id: 'condo', name: 'Condo', blurb: 'A compact apartment: entry hall, open kitchen, a balcony. Quick to learn by heart.' },
-  { id: 'family', name: 'Family home', blurb: 'Center-hall house, one or two storeys, garage and garden. The classic memory palace.' },
+  { id: 'condo', name: 'Condo', blurb: 'A compact city flat: modern, railroad, pre-war Classic Six or warehouse loft. Quick to learn by heart.' },
+  { id: 'family', name: 'Family home', blurb: 'Colonial, Foursquare, bungalow, ranch, shotgun, Cape Cod or dogtrot, with a garden. The classic memory palace.' },
   { id: 'prairie', name: 'Prairie / Wright', blurb: 'Long low horizontals, hearth at the heart, terraces — even a house over a waterfall.' },
-  { id: 'mansion', name: 'Mansion / Palace', blurb: 'Symmetric wings, grand hall and gallery, ballroom, fountain court. Room for hundreds of loci.' },
+  { id: 'mansion', name: 'Mansion / Palace', blurb: 'Palladian wings, Villa Rotonda, Elizabethan long gallery or Chinese courtyard. Room for hundreds of loci.' },
 ];
 
-const PARAM_LABELS: Record<string, string> = { floors: 'Floors', bedrooms: 'Bedrooms', garage: 'Garage', corner: 'Corner unit', variant: 'Variant', court: 'Fountain court' };
-const VARIANT_LABELS: Record<string, string> = { robie: 'Robie (long & low)', fallingwater: 'Fallingwater (over a stream)', usonian: 'Usonian (L around a pond)' };
+const PARAM_LABELS: Record<string, string> = { plan: 'Plan', floors: 'Floors', bedrooms: 'Bedrooms', garage: 'Garage', corner: 'Corner unit', variant: 'Variant', court: 'Fountain court' };
+const VARIANT_LABELS: Record<string, string> = {
+  robie: 'Robie (long & low)', fallingwater: 'Fallingwater (over a stream)', usonian: 'Usonian (L around a pond)', willits: 'Willits (cross around a hearth)',
+  colonial: 'Colonial center hall', foursquare: 'American Foursquare', bungalow: 'Craftsman bungalow', ranch: 'Mid-century ranch',
+  shotgun: 'Shotgun / camelback', capecod: 'Cape Cod', dogtrot: 'Dogtrot (open breezeway)',
+  linear: 'Modern flat', railroad: 'Railroad flat', classicsix: 'Classic Six (pre-war)', loft: 'Warehouse loft',
+  palladian: 'Palladian country house', rotonda: 'Villa Rotonda (four porticos)', elizabethan: 'Elizabethan E-plan', siheyuan: 'Siheyuan courtyard house',
+};
 const binary = new Set(['garage', 'corner', 'court']);
 /** Yes/No only for on/off options; counts like floors and bedrooms show their number. */
 const valueLabel = (k: string, v: string) => (binary.has(k) ? (v === '1' ? 'Yes' : 'No') : VARIANT_LABELS[v] ?? v);
 const SYM_NOTE: Record<StyleId, string> = {
-  family: 'Centered hall with mirrored rooms; no garage.',
+  family: 'Mirrored plan and facade (Colonial, Cape Cod, shotgun or dogtrot); no garage.',
   condo: 'Living room centered between twin bedrooms.',
   prairie: 'A Winslow-House-style plan: centered core, twin hearths, matching wings.',
   mansion: 'Classical mirrored wings. Uncheck for a rambling, asymmetric palace.',
@@ -56,8 +62,8 @@ export function NewPalaceDialog() {
   const [symmetric, setSymmetric] = useState(SYMMETRIC_DEFAULT.family);
   const close = () => setUi({ dialog: null });
   const spec = paramsFor(style);
-  // Fallingwater and Usonian are shaped by their site; symmetry doesn't apply to them.
-  const symApplies = !(style === 'prairie' && (params.variant === 'fallingwater' || params.variant === 'usonian'));
+  // Some plans are shaped by their site or tradition; symmetry doesn't apply to them.
+  const symApplies = symmetricApplies(style, params);
   const create = () => {
     const chosen: Record<string, string> = Object.fromEntries(Object.entries(params).filter(([k, v]) => v && spec[k]));
     // Only record options that differ from the defaults, so plain recipes stay short.
@@ -104,7 +110,7 @@ export function NewPalaceDialog() {
         </label>
         <label className={`toggle${symApplies ? '' : ' off'}`}>
           <input type="checkbox" checked={symApplies && symmetric} disabled={!symApplies} onChange={(e) => setSymmetric(e.target.checked)} />
-          <span><b>Symmetric design</b><small>{symApplies ? SYM_NOTE[style] : 'Not available for this variant; it follows its site.'}</small></span>
+          <span><b>Symmetric design</b><small>{symApplies ? SYM_NOTE[style] : 'Not available for this plan.'}</small></span>
         </label>
       </div>
       <div className="modal-actions">

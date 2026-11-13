@@ -4,7 +4,7 @@ import { byLevel, openingsByWall, roomsBesideWall, wallDir, wallLength } from '.
 import { matColor } from '../model/defaults';
 import { centroid, pointInPolygon } from '../model/geometry2d';
 import { stairFootprint, stairTargetLevel, dirVec } from '../model/stairs';
-import { CATALOG } from '../catalog/furniture';
+import { ANIMATED_CATS, CATALOG } from '../catalog/furniture';
 import { MeshBuilder, PRIMS, rgb } from './meshBuilder';
 
 const PLASTER = '#efe9de';
@@ -220,7 +220,7 @@ export function addFurnitureItem(mb: MeshBuilder, cat: string, x: number, y: num
 
 function addFurniture(mb: MeshBuilder, doc: PalaceDoc, level: Level, skip?: (cat: string) => boolean) {
   for (const f of byLevel(doc.furniture, level.id)) {
-    if (skip?.(f.cat)) continue;
+    if (ANIMATED_CATS.has(f.cat) || skip?.(f.cat)) continue;
     addFurnitureItem(mb, f.cat, f.pos[0], level.elevation + (f.dy ?? 0), f.pos[1], f.rot);
   }
 }

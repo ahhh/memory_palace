@@ -2,7 +2,7 @@ import type { Level, PalaceDoc, V2 } from '../model/schema';
 import { byLevel, levelsSorted, openingsByWall, wallDir, wallLength } from '../model/queries';
 import { pointInPolygon, rot2 } from '../model/geometry2d';
 import { dirVec } from '../model/stairs';
-import { CATALOG } from '../catalog/furniture';
+import { ANIMATED_CATS, CATALOG } from '../catalog/furniture';
 import type { HeightFn } from '../geom/site';
 
 export interface Seg { a: V2; b: V2; r: number; y0: number; y1: number }
@@ -36,8 +36,16 @@ export function buildColliders(doc: PalaceDoc): Seg[] {
   for (const f of Object.values(doc.furniture)) {
     const lv = doc.levels[f.level];
     const item = CATALOG[f.cat];
-    if (!lv || !item || f.cat === 'rug' || f.cat === 'chandelier') continue;
+    if (!lv || !item || f.cat === 'rug' || f.cat === 'chandelier' || ANIMATED_CATS.has(f.cat)) continue;
     boxSegs(f.pos[0], f.pos[1], item.dims[0] / 100, item.dims[1] / 100, f.rot, lv.elevation + (f.dy ?? 0), lv.elevation + item.dims[2] / 100);
+  }
+  // Floor voids (galleries, the river channel) are railed: the railing is solid.
+  for (const r of Object.values(doc.rooms)) {
+    const lv = doc.levels[r.level];
+    if (!lv) continue;
+    for (const h of r.holes ?? []) {
+      for (let i = 0; i < h.length; i++) segs.push({ a: h[i], b: h[(i + 1) % h.length], r: 0.04, y0: lv.elevation, y1: lv.elevation + 1 });
+    }
   }
   for (const m of Object.values(doc.masses)) {
     const lv = doc.levels[m.level];

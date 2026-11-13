@@ -6,14 +6,16 @@ import { OUT, roomGraph } from './graph';
 
 export interface SuggestedAnchor { level: Id; pos: V3; facing: number; title: string; room: Id }
 
+const d2 = (a: V2, b: V2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 const angle = (from: V2, to: V2) => Math.atan2(to[1] - from[1], to[0] - from[0]);
 
 /**
  * A classic method-of-loci route: enter at the front door, walk room to room always
  * taking the next door on your right (depth-first), climb stairs when a floor is done,
- * and drop 1–3 loci per room on its most memorable furniture.
+ * and drop one locus per room (by default) on its most memorable furniture. Each locus faces
+ * away from the room's center, where the tour camera stands to view it.
  */
-export function suggestJourney(doc: PalaceDoc, maxPerRoom = 2): SuggestedAnchor[] {
+export function suggestJourney(doc: PalaceDoc, maxPerRoom = 1): SuggestedAnchor[] {
   const g = roomGraph(doc);
   const levels = levelsSorted(doc);
   const ground = levels[0];
@@ -35,6 +37,7 @@ export function suggestJourney(doc: PalaceDoc, maxPerRoom = 2): SuggestedAnchor[
       .sort((a, b) => b.size - a.size);
     const n = Math.min(maxPerRoom, Math.max(1, Math.ceil(area / 25)));
     const lv = doc.levels[room.level];
+    const center = centroid(room.polygon);
     const picked = new Set<string>();
     for (let i = 0; i < n; i++) {
       const it = items.find((x) => !picked.has(x.f.cat));
@@ -49,7 +52,8 @@ export function suggestJourney(doc: PalaceDoc, maxPerRoom = 2): SuggestedAnchor[
         pos = [c[0], 1.2, c[1]];
         what = 'center';
       } else break;
-      const facing = Math.round((angle(enteredAt, [pos[0], pos[2]]) * 180) / Math.PI);
+      const from = d2(center, [pos[0], pos[2]]) > 0.3 ? center : enteredAt;
+      const facing = Math.round((angle(from, [pos[0], pos[2]]) * 180) / Math.PI);
       out.push({ level: room.level, pos, facing: ((facing % 360) + 360) % 360, title: `${room.label} · ${what}`, room: room.id });
     }
   };

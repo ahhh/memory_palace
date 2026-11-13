@@ -9,7 +9,9 @@ import { deepEqual } from '../share/deepEqual';
 import { suggestJourney } from '../journey/suggest';
 
 const FIXTURES = fileURLToPath(new URL('./__fixtures__/hashes.json', import.meta.url));
-import { PARAM_SETS, SEEDS, fixtureKey as key, fixtureRecipes as recipes } from './fixtureRecipes';
+import { PARAM_SETS, SEEDS, fixtureKey as key, fixtureRecipes as recipes, paramSets } from './fixtureRecipes';
+import { LATEST } from './registry';
+import { mirrorDocX } from './_lib/v2/variety';
 
 describe('generators', () => {
   const all = recipes();
@@ -50,8 +52,8 @@ describe('generators', () => {
 });
 
 describe('generator options', () => {
-  const extWalls = (style: StyleId, params: Record<string, string>, seed: string) => {
-    const doc = generate({ style, ver: 1, seed, params });
+  const extWalls = (style: StyleId, params: Record<string, string>, seed: string, ver = 1) => {
+    const doc = generate({ style, ver, seed, params });
     const ground = Object.values(doc.levels).find((l) => l.index === 0)!;
     return Object.values(doc.walls).filter((w) => w.level === ground.id && w.exterior)
       .map((w) => [Math.min(w.a[0], w.b[0]), Math.max(w.a[0], w.b[0]), Math.min(w.a[1], w.b[1]), Math.max(w.a[1], w.b[1])]);
@@ -73,6 +75,15 @@ describe('generator options', () => {
     for (const seed of SEEDS) expect(isMirrorSymmetric(extWalls(style, params, seed))).toBe(true);
   });
 
+  it.each([
+    ['family', { plan: 'colonial', symmetric: '1' }], ['family', { plan: 'capecod', symmetric: '1' }],
+    ['family', { plan: 'shotgun' }], ['family', { plan: 'dogtrot' }], ['family', { symmetric: '1' }],
+    ['condo', { plan: 'linear', symmetric: '1' }], ['condo', { plan: 'railroad' }],
+    ['prairie', { symmetric: '1' }], ['mansion', { plan: 'palladian' }], ['mansion', { plan: 'rotonda' }],
+  ] as const)('v2 %s %j has a mirror-symmetric outline for every seed', (style, params) => {
+    for (const seed of SEEDS) expect(isMirrorSymmetric(extWalls(style, params, seed, 2))).toBe(true);
+  });
+
   it('symmetric=0 makes mansions asymmetric', () => {
     expect(SEEDS.every((seed) => !isMirrorSymmetric(extWalls('mansion', { symmetric: '0' }, seed)))).toBe(true);
   });
@@ -84,6 +95,50 @@ describe('generator options', () => {
       expect(Object.keys(bare.furniture)).toHaveLength(0);
       expect(Object.keys(full.furniture).length).toBeGreaterThan(0);
       expect(Object.keys(bare.walls)).toEqual(Object.keys(full.walls));
+    }
+  });
+});
+
+describe('v2 variety', () => {
+  it.each(['family', 'condo', 'mansion', 'prairie'] as StyleId[])('every %s plan shows up for some seed', (style) => {
+    const key = style === 'prairie' ? 'variant' : 'plan';
+    const plans = GENERATORS[style]![2].PARAMS[key];
+    const names = new Set(Array.from({ length: 80 }, (_, i) => generate({ style, ver: 2, seed: `p-${i}`, params: {} }).meta.name));
+    for (const plan of plans) {
+      // Each plan, built on its own, must produce a name some unconstrained seed also produced.
+      const own = new Set(Array.from({ length: 80 }, (_, i) => generate({ style, ver: 2, seed: `p-${i}`, params: { [key]: plan } }).meta.name));
+      expect([...own].some((n) => names.has(n))).toBe(true);
+    }
+  });
+
+  it('explicit params steer the plan choice', () => {
+    for (const seed of SEEDS) {
+      const one = generate({ style: 'family', ver: 2, seed, params: { floors: '1' } });
+      expect(Object.keys(one.levels)).toHaveLength(1);
+      const court = generate({ style: 'mansion', ver: 2, seed, params: { court: '0', floors: '2' } });
+      expect(Object.keys(court.levels)).toHaveLength(2);
+    }
+  });
+
+  it('mirroring twice restores the palace and keeps it valid', () => {
+    for (const style of ['family', 'condo', 'mansion', 'prairie'] as StyleId[]) {
+      for (const params of paramSets(style, LATEST[style]!)) {
+        const doc = generate({ style, ver: 2, seed: 'mirror', params });
+        const once = mirrorDocX(structuredClone(doc));
+        expect(validate(once)).toEqual([]);
+        expect(unreachableRooms(once)).toEqual([]);
+        expect(deepEqual(mirrorDocX(once), doc)).toBe(true);
+      }
+    }
+  });
+
+  it('suggests a journey through every v2 plan', () => {
+    for (const style of ['family', 'condo', 'mansion', 'prairie'] as StyleId[]) {
+      for (const params of paramSets(style, 2)) {
+        const doc = generate({ style, ver: 2, seed: 'journey', params });
+        const j = suggestJourney(doc);
+        expect(j.length).toBeGreaterThan(3);
+      }
     }
   });
 });

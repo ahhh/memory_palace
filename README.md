@@ -5,9 +5,24 @@ A browser app for designing houses and palaces, Sims build-mode style, and turni
 server. A palace lives entirely in its URL and in your browser's local library.
 
 - **Styles with procedural seeds:** condo, family home, mansion/palace, and Frank Lloyd Wright
-  Prairie houses.
-  - The Prairie style has three variants: *Robie* (long and low), *Fallingwater* (terraces
-    cantilevered over a stream and waterfall) and *Usonian* (an L around a pond).
+  Prairie houses. Since v2 each style has several **plans** modelled on real house types; the
+  seed picks one that suits the other options (or choose it with `plan=`), and may mirror it.
+  - Family: *Colonial* center hall, *American Foursquare*, *Craftsman bungalow*, *mid-century
+    ranch*, New Orleans *shotgun* (optionally a two-storey *camelback*), *Cape Cod* and *dogtrot*.
+  - Condo: *modern flat*, New York *railroad flat*, pre-war *Classic Six*, and *warehouse loft*.
+  - Mansion: *Palladian* country house, Palladio's *Villa Rotonda*, an *Elizabethan E-plan* with
+    a long gallery, and a Beijing *siheyuan* courtyard house.
+  - Prairie (`variant=`): *Robie* (long and low), *Fallingwater* (terraces cantilevered over a
+    stream and waterfall), *Usonian* (an L around a pond) and *Willits* (a cross around a hearth).
+  - v1 links keep building exactly as before; `src/gen/_lib/v2/variety.ts` holds the shared plan
+    picker and mirror.
+- **Animals:** place a *River otter* (Furnish → Animals) near a river or pond and it swims
+  there: up and down the whole river (under any house the river runs through) or in loops
+  around the pond.
+- **Example palace:** *Otter Run* (`src/examples/otterRun.ts`), a 4-bed/2-bath Prairie house
+  with a river through the play room, a cedar deck, a lake and otters. Import
+  `public/examples/otter-run.palace` from Library, or regenerate it with
+  `OTTER_OUT=public/examples/otter-run.palace npx vitest run src/examples`.
 - **Generation options** (stored in the recipe, so links reproduce them):
   - **Furniture** on/off (`furniture=0` builds the bare architecture).
   - **Symmetric design**, by style:

@@ -32,10 +32,10 @@ export function roomGraph(doc: PalaceDoc): Map<string, Edge[]> {
   return g;
 }
 
-/** Shortest (fewest rooms) path of waypoints between two rooms. */
-export function routeBetween(g: Map<string, Edge[]>, from: string, to: string): V3[] {
+/** Shortest (fewest rooms) chain of edges between two rooms. */
+export function routeEdges(g: Map<string, Edge[]>, from: string, to: string): Edge[] {
   if (from === to) return [];
-  const prev = new Map<string, { node: string; via: V3[] }>();
+  const prev = new Map<string, { node: string; edge: Edge }>();
   const q = [from];
   const seen = new Set([from]);
   while (q.length) {
@@ -44,19 +44,24 @@ export function routeBetween(g: Map<string, Edge[]>, from: string, to: string): 
     for (const e of g.get(n) ?? []) {
       if (seen.has(e.to)) continue;
       seen.add(e.to);
-      prev.set(e.to, { node: n, via: e.via });
+      prev.set(e.to, { node: n, edge: e });
       q.push(e.to);
     }
   }
   if (!prev.has(to)) return [];
-  const out: V3[][] = [];
+  const out: Edge[] = [];
   let cur = to;
   while (cur !== from) {
     const p = prev.get(cur)!;
-    out.push(p.via);
+    out.push(p.edge);
     cur = p.node;
   }
-  return out.reverse().flat();
+  return out.reverse();
+}
+
+/** Shortest (fewest rooms) path of waypoints between two rooms. */
+export function routeBetween(g: Map<string, Edge[]>, from: string, to: string): V3[] {
+  return routeEdges(g, from, to).flatMap((e) => e.via);
 }
 
 export const anchorNode = (doc: PalaceDoc, id: Id) => doc.anchors[id]?.room ?? roomAt(doc, doc.anchors[id]?.level ?? '', [doc.anchors[id]?.pos[0] ?? 0, doc.anchors[id]?.pos[2] ?? 0])?.id ?? OUT;

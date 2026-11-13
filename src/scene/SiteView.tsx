@@ -4,6 +4,7 @@ import { useStore } from '../editor/store';
 import { buildPlants, buildTerrain, buildWater } from '../geom/site';
 import { foamMat, solidMat, terrainMat, waterMat } from './materials';
 import { useHeightFn } from './hooks';
+import { Otters } from './Otters';
 
 export function SiteView() {
   const height = useHeightFn();
@@ -21,6 +22,7 @@ export function SiteView() {
       <mesh geometry={water.surface} material={waterMat} renderOrder={1} />
       <mesh geometry={water.foam} material={foamMat} />
       <mesh geometry={trees} material={solidMat} castShadow />
+      <Otters />
     </group>
   );
 }
