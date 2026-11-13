@@ -8,9 +8,29 @@ server. A palace lives entirely in its URL and in your browser's local library.
   Prairie houses.
   - The Prairie style has three variants: *Robie* (long and low), *Fallingwater* (terraces
     cantilevered over a stream and waterfall) and *Usonian* (an L around a pond).
+- **Generation options** (stored in the recipe, so links reproduce them):
+  - **Furniture** on/off (`furniture=0` builds the bare architecture).
+  - **Symmetric design**, by style:
+    - Family: a centred hall with mirrored rooms and no garage.
+    - Condo: twin bedrooms around a centred living room.
+    - Prairie: a Winslow-House-style plan with twin hearths.
+    - Mansion: symmetric by default; `symmetric=0` gives an asymmetric palace with a single court wing.
+- **Camera keys:**
+  - Explore: arrows pan the grounds, Shift+arrows orbit and tilt, Q/E turn, +/− zoom, Home resets.
+  - Build: arrows pan the plan when nothing is selected.
 - **Build mode:** a top-down editor.
   - Room tool (drag a rectangle), walls with snapping (endpoints, walls, 45°, grid), doors,
     windows, arches, a furniture catalog, anchors, erase, undo/redo, and multiple floors.
+  - Multi-select: Shift-click, box-select, group move, arrow-key nudge, duplicate, delete.
+  - Drag wall corners to reshape; joined walls and floors follow, and openings stay inside.
+- **Detailed furniture:** 25 CC0 models from [Poly Haven](https://polyhaven.com) (2.9 MB,
+  meshopt + WebP), fitted inside each item's frozen footprint. Primitive shapes are used for
+  everything else, or for all furniture with "Detailed" switched off.
+- **Phones and tablets:** everything is tap-driven; nothing needs press-and-hold.
+  - Explore: drag to orbit, pinch to zoom, or use the camera buttons.
+  - Walk: tap the floor to walk there, swipe to look, and tap buttons to step and turn.
+  - Tour: Prev/Next buttons.
+  - The journey opens as a bottom sheet.
 - **Explore:** dollhouse orbit with Sims-style cutaway walls and the journey route drawn in.
 - **Walk:** first-person, with collision and stairs. Walk up to an anchor to read it.
 - **Tour:** flies stop to stop along the journey, routed through doors and stairs. Recall mode
@@ -24,7 +44,8 @@ server. A palace lives entirely in its URL and in your browser's local library.
 ```sh
 npm install
 npm run dev        # http://localhost:5173
-npm test           # codec round-trips, generator determinism + invariants
+npm test           # codec round-trips, generator determinism + invariants, edit commands
+npm run test:engines   # regenerate fixtures in Chromium, Firefox and WebKit (needs: npx playwright-core install chromium firefox webkit)
 npm run build      # static site in dist/
 ```
 
@@ -66,6 +87,8 @@ A recipe link only holds `style@version.seed.params`, so a generator must produc
   cyrb128 → sfc32, with `fork(label)` substreams.
 - **Fixtures.** `src/gen/__fixtures__/hashes.json` (144 recipes) and
   `src/share/__fixtures__/links.txt` (real links) fail CI if old palaces change.
+  - CI also checks them in Chromium, Firefox and WebKit (`npm run test:engines`), because
+    a link made on a laptop must rebuild identically in Safari on a phone.
   - To record a **new** version's hashes: `UPDATE_GEN_FIXTURES=1 npx vitest run src/gen`.
     Existing entries are never overwritten.
 
@@ -84,3 +107,14 @@ src/ui        panels, dialogs, overlays
 ```
 
 Stack: Vite, React 19, TypeScript, three.js, @react-three/fiber, drei, zustand, immer.
+
+## Credits
+
+Furniture models in `public/models` are CC0 (public domain) from
+[Poly Haven](https://polyhaven.com/models): sofa_02, ArmChair_01, modern_coffee_table_01,
+ClassicNightstand_01, painted_wooden_cabinet, gallinera_table, dining_chair_02,
+wooden_table_02, painted_wooden_table, wooden_bookshelf_worn, ClassicConsole_01,
+GothicCommode_01, GothicBed_01, vintage_day_bed, painted_wooden_bench, marble_bust_01,
+Rockingchair_01, chinese_screen_panels, horse_statue_01, mantel_clock_01, Lantern_01,
+ornate_mirror_01, gothic_statue. Each was optimized with gltf-transform (512 px WebP
+textures, meshopt, 50% simplification).

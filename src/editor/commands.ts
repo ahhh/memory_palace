@@ -187,3 +187,84 @@ export function copyOutline(d: PalaceDoc, from: Id, to: Id) {
     d.walls[id] = { ...w, id, level: to, height: h };
   }
 }
+
+/* ───────────────────────── Multi-selection editing ───────────────────────── */
+
+export interface Sel { kind: CollectionKey; id: Id }
+const MOVABLE: CollectionKey[] = ['walls', 'rooms', 'furniture', 'anchors', 'masses', 'stairs', 'slabs'];
+export const isMovable = (k: CollectionKey) => MOVABLE.includes(k);
+
+/** Move every selected entity by (dx, dz). Openings ride along on their walls. */
+export function translateSelection(d: PalaceDoc, sels: Sel[], dx: number, dz: number) {
+  const mv = (p: V2): V2 => q2([p[0] + dx, p[1] + dz]);
+  for (const { kind, id } of sels) {
+    switch (kind) {
+      case 'walls': { const w = d.walls[id]; if (w) { w.a = mv(w.a); w.b = mv(w.b); } break; }
+      case 'rooms': { const r = d.rooms[id]; if (r) { r.polygon = r.polygon.map(mv); if (r.holes) r.holes = r.holes.map((h) => h.map(mv)); } break; }
+      case 'furniture': { const f = d.furniture[id]; if (f) f.pos = mv(f.pos); break; }
+      case 'anchors': { const a = d.anchors[id]; if (a) moveAnchor(d, id, [a.pos[0] + dx, a.pos[1], a.pos[2] + dz]); break; }
+      case 'masses': { const m = d.masses[id]; if (m) m.center = mv(m.center); break; }
+      case 'stairs': { const s = d.stairs[id]; if (s) s.start = mv(s.start); break; }
+      case 'slabs': { const s = d.slabs[id]; if (s) s.polygon = s.polygon.map(mv); break; }
+    }
+  }
+}
+
+/** Copy the selection (walls bring their openings), offset by (dx, dz). Returns the copies. */
+export function duplicateSelection(d: PalaceDoc, sels: Sel[], dx: number, dz: number): Sel[] {
+  const out: Sel[] = [];
+  for (const { kind, id } of sels) {
+    if (!isMovable(kind)) continue;
+    const src = (d[kind] as Record<Id, { id: Id }>)[id];
+    if (!src) continue;
+    const nid = newId(d, kind);
+    (d[kind] as Record<Id, unknown>)[nid] = { ...JSON.parse(JSON.stringify(src)), id: nid };
+    if (kind === 'walls') {
+      for (const o of openingsOfWall(d, id)) {
+        const oid = newId(d, 'openings');
+        d.openings[oid] = { ...o, id: oid, wall: nid };
+      }
+    }
+    if (kind === 'anchors') d.journey.push(nid);
+    out.push({ kind, id: nid });
+  }
+  translateSelection(d, out, dx, dz);
+  return out;
+}
+
+export function rotateFurniture(d: PalaceDoc, sels: Sel[], by: number) {
+  for (const s of sels) if (s.kind === 'furniture' && d.furniture[s.id]) d.furniture[s.id].rot = deg(d.furniture[s.id].rot + by);
+}
+
+export function deleteSelection(d: PalaceDoc, sels: Sel[]) {
+  for (const s of sels) if (s.kind !== 'levels') deleteEntity(d, s.kind, s.id);
+}
+
+/**
+ * Drag a wall corner: every wall end and room-floor corner on the level that sits on
+ * `from` moves to `to`, so joined walls stay joined. Openings that no longer fit are
+ * slid back inside their wall, or removed if the wall became too short.
+ */
+export function moveVertex(d: PalaceDoc, level: Id, from: V2, to: V2) {
+  to = q2(to);
+  const same = (p: V2) => dist(p, from) < 0.011;
+  const touched: Id[] = [];
+  for (const w of byLevel(d.walls, level)) {
+    const draft = d.walls[w.id];
+    if (same(w.a)) { draft.a = to; touched.push(w.id); }
+    if (same(w.b)) { draft.b = to; touched.push(w.id); }
+  }
+  for (const r of byLevel(d.rooms, level)) {
+    if (r.polygon.some(same)) d.rooms[r.id].polygon = r.polygon.map((p) => (same(p) ? to : p));
+  }
+  for (const wid of touched) {
+    const w = d.walls[wid];
+    const L = wallLength(w);
+    if (L < 0.1) { deleteEntity(d, 'walls', wid); continue; }
+    for (const o of openingsOfWall(d, wid)) {
+      const half = o.width / 2;
+      if (o.width > L - 0.1) { delete d.openings[o.id]; continue; }
+      d.openings[o.id].offset = q(Math.min(Math.max(o.offset, half + 0.05), L - half - 0.05));
+    }
+  }
+}

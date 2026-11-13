@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore, type Mode } from '../editor/store';
+import { camBus, isTouchDevice } from '../scene/bus';
 
 const MODES: { id: Mode; label: string; key: string }[] = [
   { id: 'build', label: 'Build', key: 'B' },
@@ -20,6 +21,8 @@ export function TopBar() {
   const canRedo = useStore((s) => s.future.length > 0);
   const libraryId = useStore((s) => s.libraryId);
   const journeyLen = useStore((s) => s.doc.journey.length);
+  const [menu, setMenu] = useState(false);
+  const pick = (d: 'new' | 'library' | 'help') => { setMenu(false); setUi({ dialog: d }); };
   return (
     <header className="topbar">
       <div className="brand" title="Memory Palace">
@@ -36,12 +39,22 @@ export function TopBar() {
         ))}
       </nav>
       <div className="actions">
-        <button onClick={undo} disabled={!canUndo} title="Undo (⌘Z)">↶</button>
-        <button onClick={redo} disabled={!canRedo} title="Redo (⇧⌘Z)">↷</button>
-        <button onClick={() => setUi({ dialog: 'new' })}>New</button>
-        <button onClick={() => setUi({ dialog: 'library' })}>Library</button>
+        <button className="desk" onClick={undo} disabled={!canUndo} title="Undo (⌘Z)">↶</button>
+        <button className="desk" onClick={redo} disabled={!canRedo} title="Redo (⇧⌘Z)">↷</button>
+        <button className="desk" onClick={() => setUi({ dialog: 'new' })}>New</button>
+        <button className="desk" onClick={() => setUi({ dialog: 'library' })}>Library</button>
         <button className="primary" onClick={() => setUi({ dialog: 'share' })}>Share</button>
-        <button onClick={() => setUi({ dialog: 'help' })} title="Help">?</button>
+        <button className="desk" onClick={() => setUi({ dialog: 'help' })} title="Help">?</button>
+        <button className="more" aria-label="More" onClick={() => setMenu(!menu)}>⋯</button>
+        {menu && (
+          <div className="menu" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => pick('new')}>New palace</button>
+            <button onClick={() => pick('library')}>Library</button>
+            <button onClick={() => { setMenu(false); undo(); }} disabled={!canUndo}>Undo</button>
+            <button onClick={() => { setMenu(false); redo(); }} disabled={!canRedo}>Redo</button>
+            <button onClick={() => pick('help')}>Help</button>
+          </div>
+        )}
       </div>
     </header>
   );
@@ -79,7 +92,7 @@ export function AnchorCard() {
       {hide ? (
         <button className="reveal" onClick={() => setRevealed(true)}>What was here? <b>Reveal</b></button>
       ) : mode === 'tour' ? (
-        <textarea className="ac-note" rows={4} value={a.note} placeholder="Attach an idea to this place…" onChange={(e) => commit('Anchor', (d) => { d.anchors[id].note = e.target.value; })} />
+        <textarea className="ac-note" rows={3} value={a.note} placeholder="Attach an idea to this place…" onChange={(e) => commit('Anchor', (d) => { d.anchors[id].note = e.target.value; })} />
       ) : (
         <p className="ac-note-ro">{a.note || <i>No idea attached yet.</i>}</p>
       )}
@@ -96,7 +109,7 @@ export function TourControls() {
   useEffect(() => {
     if (mode !== 'tour') return;
     const k = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('input,textarea')) return;
+      if ((e.target as HTMLElement)?.closest?.('input,textarea')) return;
       const i = useStore.getState().ui.tourIndex;
       if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); setUi({ tourIndex: Math.min(len - 1, i + 1) }); }
       if (e.key === 'ArrowLeft') setUi({ tourIndex: Math.max(0, i - 1) });
@@ -125,7 +138,25 @@ export function WalkOverlay() {
     document.addEventListener('pointerlockchange', f);
     return () => document.removeEventListener('pointerlockchange', f);
   }, []);
+  const [touch] = useState(isTouchDevice);
   if (mode !== 'walk') return null;
+  if (touch) {
+    return (
+      <div className="walk-pad">
+        <p className="pad-hint">Tap the floor to walk there · swipe to look</p>
+        <div className="pad-row">
+          <button aria-label="Turn left" onClick={() => camBus.emit({ type: 'turn', deg: 45 })}>↶</button>
+          <button aria-label="Step forward" className="primary" onClick={() => camBus.emit({ type: 'step', dist: 1.5 })}>▲</button>
+          <button aria-label="Turn right" onClick={() => camBus.emit({ type: 'turn', deg: -45 })}>↷</button>
+        </div>
+        <div className="pad-row">
+          <button aria-label="Turn around" onClick={() => camBus.emit({ type: 'turn', deg: 180 })}>⟲</button>
+          <button aria-label="Step back" onClick={() => camBus.emit({ type: 'step', dist: -1 })}>▼</button>
+          <button aria-label="Exit walk" onClick={() => useStore.getState().setUi({ mode: 'explore' })}>✕</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <>
       {locked ? <div className="crosshair" /> : (
@@ -137,6 +168,35 @@ export function WalkOverlay() {
       )}
     </>
   );
+}
+
+/** Tap-only camera buttons for Explore (also handy with a mouse). */
+export function ExploreControls() {
+  const mode = useStore((s) => s.ui.mode);
+  if (mode !== 'explore') return null;
+  const o = (e: Parameters<typeof camBus.emit>[0]) => () => camBus.emit(e);
+  return (
+    <div className="cam-pad panel" aria-label="Camera">
+      <button aria-label="Rotate left" onClick={o({ type: 'orbit', dTheta: -Math.PI / 6 })}>⟲</button>
+      <button aria-label="Tilt up" onClick={o({ type: 'orbit', dPhi: -0.2 })}>▲</button>
+      <button aria-label="Rotate right" onClick={o({ type: 'orbit', dTheta: Math.PI / 6 })}>⟳</button>
+      <button aria-label="Zoom in" onClick={o({ type: 'orbit', zoom: 0.7 })}>＋</button>
+      <button aria-label="Tilt down" onClick={o({ type: 'orbit', dPhi: 0.2 })}>▼</button>
+      <button aria-label="Zoom out" onClick={o({ type: 'orbit', zoom: 1.45 })}>－</button>
+      <button className="home" aria-label="Reset view" onClick={o({ type: 'orbit', reset: true })}>⌂ Reset view</button>
+      {!isTouchDevice() && <p className="keys-hint">←↑→↓ pan · Shift+arrows orbit · Q/E turn · +/− zoom · Home reset</p>}
+    </div>
+  );
+}
+
+/** Phone-only button that slides the journey/inspector panel up as a sheet. */
+export function SheetToggle() {
+  const mode = useStore((s) => s.ui.mode);
+  const open = useStore((s) => s.ui.sheet);
+  const n = useStore((s) => s.doc.journey.length);
+  const setUi = useStore((s) => s.setUi);
+  if (mode !== 'build' && mode !== 'explore') return null;
+  return <button className="sheet-toggle" onClick={() => setUi({ sheet: !open })}>{open ? '✕ Close' : `☰ Journey${n ? ` · ${n}` : ''}`}</button>;
 }
 
 export function Toast() {

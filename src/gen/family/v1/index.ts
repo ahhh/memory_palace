@@ -31,7 +31,11 @@ export function generate(recipe: Recipe): PalaceDoc {
   let bedrooms = P.bedrooms ? Number(P.bedrooms) : prog.int(2, 4);
   let floors = P.floors ? Number(P.floors) : (bedrooms >= 4 || prog.chance(0.6) ? 2 : 1);
   if (floors === 1 && bedrooms > 3) { if (P.floors) bedrooms = 3; else floors = 2; }
-  const garage = P.garage ? P.garage === '1' : prog.chance(0.55);
+  const garageRoll = P.garage ? P.garage === '1' : prog.chance(0.55);
+  // Symmetric: centered hall, mirrored room splits, no garage (it would break the facade).
+  const sym = P.symmetric === '1';
+  const garage = garageRoll && !sym;
+  if (sym) bedrooms = Math.min(bedrooms, floors === 2 ? 3 : 2);
 
   const b = new DocBuilder({
     name: `${prog.pick(NAMES_A)} ${prog.pick(NAMES_B)}`,
@@ -50,7 +54,8 @@ export function generate(recipe: Recipe): PalaceDoc {
   const x0 = -Math.round(Wd / 20) * 10, z0 = -Math.round(D / 20) * 10;
   const x1 = x0 + Wd, z1 = z0 + D;
   const HW = 240;
-  const hx0 = x0 + dims.step(floors === 2 ? 420 : 520, Wd - HW - (floors === 2 ? 420 : 560), 20);
+  const hxRoll = x0 + dims.step(floors === 2 ? 420 : 520, Wd - HW - (floors === 2 ? 420 : 560), 20);
+  const hx0 = sym ? x0 + Math.round((Wd - HW) / 20) * 10 : hxRoll;
   const hx1 = hx0 + HW;
   const publicLeft = dims.chance(0.5);
   const leftR = R(x0, z0, hx0, z1), rightR = R(hx1, z0, x1, z1), hallR = R(hx0, z0, hx1, z1);
@@ -74,9 +79,15 @@ export function generate(recipe: Recipe): PalaceDoc {
   g0.push(...pubRooms);
 
   const privRooms: RoomSpec[] = [];
-  if (floors === 2) {
+  if (floors === 2 && sym) {
+    privRooms.push(room(privR, 'office', 'Study', 'oak'), room(privR, 'kitchen', 'Kitchen', 'tile'));
+    stack(privR, pubW).forEach((r, i) => { privRooms[i].rect = r; });
+  } else if (floors === 2) {
     privRooms.push(room(privR, 'office', 'Study', 'oak'), room(privR, 'bath', 'Powder room', 'tile'), room(privR, 'kitchen', 'Kitchen', 'tile'));
     stack(privR, [32, 22, 46]).forEach((r, i) => { privRooms[i].rect = r; });
+  } else if (sym) {
+    privRooms.push(room(privR, 'bedroom', 'Main bedroom', 'carpet'), room(privR, 'bath', 'Bathroom', 'tile'), room(privR, 'bedroom', 'Bedroom 2', 'carpet'));
+    stack(privR, pubW).forEach((r, i) => { privRooms[i].rect = r; });
   } else {
     const types: RoomSpec[] = [];
     for (let i = 0; i < bedrooms; i++) types.push(room(privR, 'bedroom', i === 0 ? 'Main bedroom' : `Bedroom ${i + 1}`, 'carpet'));
@@ -100,7 +111,7 @@ export function generate(recipe: Recipe): PalaceDoc {
   const dr = rng.fork('doors');
   placeExteriorDoor(b, plan0, 0, ['S'], 100, 220, dr, blockers0);
   const kitchenIdx = g0.findIndex((r) => r.type === 'kitchen');
-  placeExteriorDoor(b, plan0, kitchenIdx, ['N'], 90, 210, dr, blockers0, false);
+  if (!sym) placeExteriorDoor(b, plan0, kitchenIdx, ['N'], 90, 210, dr, blockers0, false);
   if (garageR) placeExteriorDoor(b, plan0, g0.length - 1, ['S'], 260, 220, dr, []);
   placeDoors(b, plan0, dr, doors, blockers0);
 
@@ -126,7 +137,8 @@ export function generate(recipe: Recipe): PalaceDoc {
     for (let i = bedrooms >= 3 ? 2 : 1; i < bedrooms; i++) right.push(bed(i, otherSide));
     right.splice(Math.min(1, right.length), 0, room(otherSide, 'bath', 'Bathroom', 'tile'));
     stack(stairSide, [62, 38]).forEach((r, i) => { left[i].rect = r; });
-    stack(otherSide, right.map((r) => (r.type === 'bath' ? 18 : 30))).forEach((r, i) => { right[i].rect = r; });
+    if (sym) right.sort((a, c) => (a.type === 'bath' ? 1 : 0) - (c.type === 'bath' ? 1 : 0));
+    stack(otherSide, sym ? [62, 38] : right.map((r) => (r.type === 'bath' ? 18 : 30))).forEach((r, i) => { right[i].rect = r; });
     g1.push(...left, ...right);
     const plan1 = buildLevel(b, L1, levelH, g1, mats);
     const holeBlock = stairRect ? [R(stairRect.x0 - 10, stairRect.z0 - 10, stairRect.x1 + 10, stairRect.z1 + 10)] : [];

@@ -4,12 +4,14 @@ import { useStore, type Tool } from '../editor/store';
 import { MATERIALS } from '../model/defaults';
 import { CATALOG, CATALOG_GROUPS } from '../catalog/furniture';
 import { levelsSorted, wallLength } from '../model/queries';
-import { addAnchor, addLevelAbove, copyOutline, deleteEntity, openingFits, reorderJourney } from '../editor/commands';
+import {
+  addAnchor, addLevelAbove, copyOutline, deleteEntity, deleteSelection, duplicateSelection, openingFits, reorderJourney, rotateFurniture, type Sel,
+} from '../editor/commands';
 import { suggestJourney } from '../journey/suggest';
 import { q, deg } from '../model/units';
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string; hint: string }[] = [
-  { id: 'select', label: 'Select', key: 'V', icon: '↖', hint: 'Click to select, drag furniture and anchors to move' },
+  { id: 'select', label: 'Select', key: 'V', icon: '↖', hint: 'Click to select · Shift-click to add · drag empty floor to box-select · drag to move · drag orange wall corners to reshape' },
   { id: 'room', label: 'Room', key: 'M', icon: '▭', hint: 'Drag a rectangle to build four walls and a floor' },
   { id: 'wall', label: 'Wall', key: 'L', icon: '╱', hint: 'Click to start, click to place; double-click or Esc to stop. Alt = no snap' },
   { id: 'door', label: 'Door', key: 'D', icon: '🚪', hint: 'Hover a wall and click to add a door' },
@@ -27,6 +29,7 @@ export function Toolbar() {
   const cat = useStore((s) => s.ui.furnitureCat);
   const wallMaterial = useStore((s) => s.ui.wallMaterial);
   const snap = useStore((s) => s.ui.snap);
+  const placeRot = useStore((s) => s.ui.placeRot);
   const showLabels = useStore((s) => s.ui.showLabels);
   const [group, setGroup] = useState(CATALOG[cat]?.group ?? CATALOG_GROUPS[0]);
   const hint = TOOLS.find((t) => t.id === tool)?.hint;
@@ -51,6 +54,7 @@ export function Toolbar() {
       )}
       {tool === 'furniture' && (
         <div className="catalog">
+          <button className="wide rotate" onClick={() => setUi({ placeRot: (placeRot + 90) % 360 })}>⟳ Rotate item (R) · {placeRot}°</button>
           <div className="chips">
             {CATALOG_GROUPS.map((g) => <button key={g} className={`chip${g === group ? ' on' : ''}`} onClick={() => setGroup(g)}>{g}</button>)}
           </div>
@@ -67,8 +71,19 @@ export function Toolbar() {
       <div className="toggles">
         <label><input type="checkbox" checked={snap} onChange={(e) => setUi({ snap: e.target.checked })} /> Snap</label>
         <label><input type="checkbox" checked={showLabels} onChange={(e) => setUi({ showLabels: e.target.checked })} /> Labels</label>
+        <DetailToggle />
       </div>
     </div>
+  );
+}
+
+function DetailToggle() {
+  const detailed = useStore((s) => s.ui.detailed);
+  const setUi = useStore((s) => s.setUi);
+  return (
+    <label className="roof-toggle" title="Detailed CC0 furniture models from Poly Haven">
+      <input type="checkbox" checked={detailed} onChange={(e) => setUi({ detailed: e.target.checked })} /> Detailed
+    </label>
   );
 }
 
@@ -81,9 +96,10 @@ export function LevelSwitcher() {
   const setUi = useStore((s) => s.setUi);
   const commit = useStore((s) => s.commit);
   const levels = levelsSorted(doc).slice().reverse();
+  const [open, setOpen] = useState(false);
   return (
-    <div className="levels panel">
-      <div className="levels-title">Floors</div>
+    <div className={`levels panel${open ? ' open' : ''}`}>
+      <div className="levels-title">Floors <button className="view-toggle" onClick={() => setOpen(!open)}>{open ? 'Done' : 'View ▾'}</button></div>
       {levels.map((l) => (
         <button key={l.id} className={`level${l.id === active ? ' on' : ''}`} onClick={() => setUi({ activeLevel: l.id, selection: { kind: 'levels', id: l.id } })}>
           <b>{l.index + 1}</b> {l.name}
@@ -105,6 +121,7 @@ export function LevelSwitcher() {
             </button>
           ))}
           <label className="roof-toggle"><input type="checkbox" checked={showRoof} onChange={(e) => setUi({ showRoof: e.target.checked })} /> Roof</label>
+          <DetailToggle />
         </div>
       )}
     </div>
@@ -126,11 +143,33 @@ function Num({ label, value, step = 0.05, min, max, onChange, unit = 'm' }: { la
   );
 }
 
+function MultiInspector() {
+  const multi = useStore((s) => s.ui.multi);
+  const commit = useStore((s) => s.commit);
+  const setUi = useStore((s) => s.setUi);
+  const counts = new Map<string, number>();
+  for (const m of multi) counts.set(KIND_LABEL[m.kind] ?? m.kind, (counts.get(KIND_LABEL[m.kind] ?? m.kind) ?? 0) + 1);
+  return (
+    <div className="inspector">
+      <div className="insp-head"><h3>{multi.length} selected</h3></div>
+      <p className="muted">{[...counts].map(([k, n]) => `${n} × ${k.toLowerCase()}`).join(' · ')}</p>
+      <div className="row wrap">
+        <button onClick={() => { let c: Sel[] = []; commit('Duplicate', (d) => { c = duplicateSelection(d, multi, 0.5, 0.5); }); setUi({ selection: c.at(-1) ?? null, multi: c }); }}>Duplicate</button>
+        {multi.some((m) => m.kind === 'furniture') && <button onClick={() => commit('Rotate', (d) => rotateFurniture(d, multi, 90))}>⟳ Rotate furniture</button>}
+        <button className="danger" onClick={() => { commit('Delete', (d) => deleteSelection(d, multi)); setUi({ selection: null }); }}>Delete all</button>
+      </div>
+      <p className="muted small">Drag any selected item to move them all · arrows nudge · ⌘/Ctrl+D duplicates · Shift-click adds or removes · drag on empty floor to box-select.</p>
+    </div>
+  );
+}
+
 export function Inspector() {
   const sel = useStore((s) => s.ui.selection);
+  const multiCount = useStore((s) => s.ui.multi.length);
   const doc = useStore((s) => s.doc);
   const commit = useStore((s) => s.commit);
   const setUi = useStore((s) => s.setUi);
+  if (multiCount > 1) return <MultiInspector />;
   if (!sel) {
     return (
       <div className="inspector empty">
@@ -304,7 +343,7 @@ export function JourneyPanel() {
             onDragOver={(e) => e.preventDefault()}
             onDrop={() => { if (dragFrom !== null && dragFrom !== i) commit('Reorder', (d) => reorderJourney(d, dragFrom, i)); setDragFrom(null); }}
             className={sel?.id === a.id ? 'on' : ''}
-            onClick={() => setUi({ selection: { kind: 'anchors', id: a.id }, activeLevel: a.level })}
+            onClick={() => setUi({ selection: { kind: 'anchors', id: a.id }, activeLevel: a.level, openAnchor: useStore.getState().ui.mode === 'explore' ? a.id : null })}
           >
             <span className="n">{i + 1}</span>
             <span className="t">
@@ -322,9 +361,10 @@ export function JourneyPanel() {
 export function SidePanel() {
   const [tab, setTab] = useState<'journey' | 'inspect'>('journey');
   const sel = useStore((s) => s.ui.selection);
+  const sheet = useStore((s) => s.ui.sheet);
   const shown = sel && tab === 'journey' && sel.kind !== 'anchors' ? 'inspect' : tab;
   return (
-    <div className="side panel">
+    <div className={`side panel${sheet ? ' open' : ''}`}>
       <div className="tabs">
         <button className={shown === 'journey' ? 'on' : ''} onClick={() => { setTab('journey'); useStore.getState().setUi({ selection: null }); }}>Journey</button>
         <button className={shown === 'inspect' ? 'on' : ''} onClick={() => setTab('inspect')}>Inspector</button>

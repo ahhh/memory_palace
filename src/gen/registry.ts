@@ -19,10 +19,21 @@ export const GENERATORS: Partial<Record<StyleId, Record<number, Gen>>> = {
 
 export const LATEST: Partial<Record<StyleId, number>> = { condo: 1, family: 1, mansion: 1, prairie: 1 };
 
+/**
+ * Options every style understands. FROZEN semantics, like the generators themselves:
+ *  furniture=0  → generate the bare architecture (no furniture).
+ *  symmetric=1/0 → mirror-symmetric plan and facade, or not. Styles without the param set
+ *                  use their own default (SYMMETRIC_DEFAULT); prairie fallingwater/usonian ignore it.
+ */
+export const COMMON_PARAMS = { furniture: ['0', '1'], symmetric: ['0', '1'] };
+export const SYMMETRIC_DEFAULT: Record<StyleId, boolean> = { condo: false, family: false, prairie: false, mansion: true };
+
 export function generate(r: Recipe): PalaceDoc {
   const g = GENERATORS[r.style]?.[r.ver];
   if (!g) throw new Error(`No generator ${r.style}@${r.ver}`);
-  return g.generate({ ...r, params: { ...r.params } });
+  const doc = g.generate({ ...r, params: { ...r.params } });
+  if (r.params.furniture === '0') doc.furniture = {};
+  return doc;
 }
 
 export function paramsFor(style: StyleId): Record<string, string[]> {

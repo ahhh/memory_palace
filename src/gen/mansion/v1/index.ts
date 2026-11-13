@@ -72,6 +72,19 @@ export function generate(recipe: Recipe): PalaceDoc {
   const xs = cw2 + Math.round(ww / 100) * 50, zs = zWb + Math.round(wd / 100) * 50;
   const gridR = [R(cw2, zs, xs, zWf), R(xs, zs, cw2 + ww, zWf), R(cw2, zWb, xs, zs), R(xs, zWb, cw2 + ww, zs)];
   const leftProg = prog.pick(LEFT_WING), rightProg = prog.pick(RIGHT_WING);
+  // Asymmetric (symmetric=0): the west wing gets its own width/depth/setback from a separate
+  // random stream, so the default symmetric palaces are untouched.
+  const asym = P.symmetric === '0';
+  const a = rng.fork('asym');
+  const wwL = asym ? m50(a, 700, ww - 200) : ww;
+  // Depth ≥ 10.5 m keeps room for the corridor stair plus a door to the hall behind it.
+  const wdL = asym ? m50(a, 1050, Math.max(1050, wd)) : wd;
+  const zWfL = asym ? zF - a.pick([0, 150, 300]) : zWf, zWbL = zWfL - wdL;
+  const wL = asym ? R(-cw2 - wwL, zWbL, -cw2, zWfL) : mirrorX(wR, 0);
+  const xsL = -cw2 - Math.round(wwL / 100) * 50, zsL = zWbL + Math.round(wdL / 100) * 50;
+  const gridL = asym
+    ? [R(xsL, zsL, -cw2, zWfL), R(-cw2 - wwL, zsL, xsL, zWfL), R(xsL, zWbL, -cw2, zsL), R(-cw2 - wwL, zWbL, xsL, zsL)]
+    : gridR.map((r) => mirrorX(r, 0));
   const bw = Math.min(m50(d, 550, 700), cw2 + ww - xs);
   const courtD = m50(d, 900, 1300);
   const bwR = court ? R(cw2 + ww - bw, zB - courtD, cw2 + ww, zWb) : null;
@@ -88,14 +101,14 @@ export function generate(recipe: Recipe): PalaceDoc {
   ];
   gridR.forEach((r, i) => {
     r0.push(room(r, rightProg[i][0], rightProg[i][1], rightProg[i][0] === 'kitchen' ? 'tile' : 'parquet'));
-    r0.push(room(mirrorX(r, 0), leftProg[i][0], leftProg[i][1], leftProg[i][0] === 'kitchen' ? 'tile' : 'parquet'));
+    r0.push(room(gridL[i], leftProg[i][0], leftProg[i][1], leftProg[i][0] === 'kitchen' ? 'tile' : 'parquet'));
   });
   if (bwR) {
     const parts = partition(bwR, [55, 45], 'z');
     r0.push(room(parts[0], 'gallery', 'Sculpture gallery', 'marble'));
-    r0.push(room(mirrorX(parts[0], 0), 'salon', 'Orangery', 'flagstone'));
+    if (!asym) r0.push(room(mirrorX(parts[0], 0), 'salon', 'Orangery', 'flagstone'));
     r0.push(room(parts[1], 'laundry', 'Servants’ hall', 'tile'));
-    r0.push(room(mirrorX(parts[1], 0), 'gallery', 'Portrait gallery', 'marble'));
+    if (!asym) r0.push(room(mirrorX(parts[1], 0), 'gallery', 'Portrait gallery', 'marble'));
   }
   const p0 = buildLevel(b, L0, H0, r0, mats, 40, 15);
   const dr = rng.fork('doors');
@@ -123,19 +136,21 @@ export function generate(recipe: Recipe): PalaceDoc {
       partition(back, [1, 1, 1], 'x').forEach((r, i) => rr.push(room(r, 'bedroom', `Guest room ${i + 1}`, 'oak')));
     }
     const names = idx === 1 ? ['Blue bedroom', 'Rose bedroom', 'Yellow bedroom', 'Green bedroom'] : ['Nursery', 'Governess', 'Maid’s room', 'Valet’s room'];
+    const partsL = asym ? partition(R(-cw2 - wwL, zWbL, -cw2 - 220, zWfL), [38, 24, 38], 'z') : [];
     for (const side of [1, -1]) {
-      const mir = (r: Rect) => (side === 1 ? r : mirrorX(r, 0));
-      rr.push(room(mir(corridorR), 'hall', side === 1 ? 'East corridor' : 'West corridor', 'oak'));
-      rr.push(room(mir(parts[0]), 'bedroom', names[side === 1 ? 0 : 1], 'carpet'));
-      rr.push(room(mir(parts[1]), 'bath', 'Bathroom', 'tile'));
-      rr.push(room(mir(parts[2]), 'bedroom', names[side === 1 ? 2 : 3], 'carpet'));
+      const mir = (r: Rect, i: number) => (side === 1 ? r : asym ? partsL[i] : mirrorX(r, 0));
+      const corr = side === 1 ? corridorR : asym ? R(-cw2 - 220, zWbL, -cw2, zWfL) : mirrorX(corridorR, 0);
+      rr.push(room(corr, 'hall', side === 1 ? 'East corridor' : 'West corridor', 'oak'));
+      rr.push(room(mir(parts[0], 0), 'bedroom', names[side === 1 ? 0 : 1], 'carpet'));
+      rr.push(room(mir(parts[1], 1), 'bath', 'Bathroom', 'tile'));
+      rr.push(room(mir(parts[2], 2), 'bedroom', names[side === 1 ? 2 : 3], 'carpet'));
     }
     const p = buildLevel(b, lv, h, rr, mats, 35, 15);
     // Secondary stair in the west corridor, against the inner wall.
     const stairX = -cw2 - 15 - 55;
     const blockers = [grow(st, 20)];
-    if (rise !== null) blockers.push(grow(stair(b, lv, stairX, zWf - 15 - 150, 270, 100, rise), 15));
-    if (idx === 2) blockers.push(grow(R(stairX - 50, zWf - 165 - stairRun(H1 + 20), stairX + 50, zWf - 165), 15));
+    if (rise !== null) blockers.push(grow(stair(b, lv, stairX, zWfL - 15 - 150, 270, 100, rise), 15));
+    if (idx === 2) blockers.push(grow(R(stairX - 50, zWfL - 165 - stairRun(H1 + 20), stairX + 50, zWfL - 165), 15));
     placeDoors(b, p, rng.fork('doors' + idx), { ...doors, doorWidth: 100, doorHeight: 240 }, blockers);
     placeWindows(b, p, (r) => (r.type === 'bath' ? W(90, 150, 100, 400) : idx === 1 ? W(120, 230, 60, 300) : W(100, 160, 80, 300)));
     furnishLevel(b, p, rng.fork('furnish' + idx), blockers);
@@ -145,9 +160,9 @@ export function generate(recipe: Recipe): PalaceDoc {
   if (L2) upper(L2, H2, 2, null);
 
   // Roofs.
-  const mainRects = [R(-cw2, zB, cw2, zF), wR, mirrorX(wR, 0)];
+  const mainRects = [R(-cw2, zB, cw2, zF), wR, wL];
   const fps = [
-    { level: L0, elevation: 0, height: H0, rects: [...mainRects, ...(bwR ? [bwR, mirrorX(bwR, 0)] : [])] },
+    { level: L0, elevation: 0, height: H0, rects: [...mainRects, ...(bwR ? (asym ? [bwR] : [bwR, mirrorX(bwR, 0)]) : [])] },
     { level: L1, elevation: H0 + 20, height: H1, rects: mainRects },
     ...(L2 ? [{ level: L2, elevation: H0 + H1 + 40, height: H2, rects: mainRects }] : []),
   ];
@@ -170,7 +185,8 @@ export function generate(recipe: Recipe): PalaceDoc {
   const n = Math.floor(poolL / 400) + 1;
   row(b, 'tree', -700, poolZ0, -700, poolZ0 + poolL, n, 110);
   row(b, 'tree', 700, poolZ0, 700, poolZ0 + poolL, n, 110);
-  row(b, 'hedge', -halfW, zF + 300, -pw - 300, zF + 300, Math.floor((halfW - pw - 300) / 120), 90);
+  const halfL = cw2 + wwL;
+  row(b, 'hedge', -halfL, zF + 300, -pw - 300, zF + 300, Math.floor((halfL - pw - 300) / 120), 90);
   row(b, 'hedge', pw + 300, zF + 300, halfW, zF + 300, Math.floor((halfW - pw - 300) / 120), 90);
   b.slab(L0, R(-150, zF + 20 + pd, 150, poolZ0 + poolL + 800), 'path', 6, 2, false, 'gravel');
   if (bwR) {

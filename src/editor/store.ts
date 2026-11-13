@@ -14,7 +14,12 @@ export interface UiState {
   mode: Mode;
   tool: Tool;
   activeLevel: Id;
+  /** Primary selection (shown in the Inspector). */
   selection: Selection | null;
+  /** Everything selected, including the primary. Setting `selection` alone resets this to it. */
+  multi: Selection[];
+  /** Furniture placement rotation (degrees). */
+  placeRot: number;
   furnitureCat: string;
   wallMaterial: string;
   snap: boolean;
@@ -23,6 +28,8 @@ export interface UiState {
   showRoof: boolean;
   showLabels: boolean;
   showRoute: boolean;
+  /** Draw furniture with detailed 3D models where available. */
+  detailed: boolean;
   tourIndex: number;
   recall: boolean;
   /** Which anchor card is open in explore/walk. */
@@ -30,6 +37,8 @@ export interface UiState {
   /** Cursor in plan coords (build mode). */
   cursor: V2 | null;
   dialog: null | 'new' | 'share' | 'library' | 'help';
+  /** Phone layout: side panel open as a bottom sheet. */
+  sheet: boolean;
   toast: string | null;
 }
 
@@ -41,6 +50,8 @@ interface Store {
   libraryId: string | null;
   /** Bumped by every edit, undo and redo (not by load) — drives autosave. */
   rev: number;
+  /** Bumped by every load, so cameras re-frame the new palace. */
+  loadId: number;
   ui: UiState;
   commit: (label: string, fn: (d: Draft<PalaceDoc>) => void) => void;
   undo: () => void;
@@ -66,10 +77,11 @@ export const useStore = create<Store>((set, get) => ({
   future: [],
   libraryId: null,
   rev: 0,
+  loadId: 0,
   ui: {
-    mode: 'explore', tool: 'select', activeLevel: 'L1', selection: null, furnitureCat: 'sofa', wallMaterial: 'brick',
-    snap: true, grid: 0.1, wallView: 'cutaway', showRoof: true, showLabels: true, showRoute: true, tourIndex: 0,
-    recall: false, openAnchor: null, cursor: null, dialog: null, toast: null,
+    mode: 'explore', tool: 'select', activeLevel: 'L1', selection: null, multi: [], placeRot: 0, furnitureCat: 'sofa', wallMaterial: 'brick',
+    snap: true, grid: 0.1, wallView: 'cutaway', showRoof: true, showLabels: true, showRoute: true, detailed: true, tourIndex: 0,
+    recall: false, openAnchor: null, cursor: null, dialog: null, toast: null, sheet: false,
   },
   commit: (_label, fn) => {
     const { doc, past } = get();
@@ -91,10 +103,14 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ doc: next, past: [...past, doc], future: future.slice(1), rev: s.rev + 1 }));
   },
   load: (doc, libraryId) => {
-    set({ doc, past: [], future: [], libraryId });
-    set((s) => ({ ui: { ...s.ui, activeLevel: defaultLevel(doc), selection: null, tourIndex: 0, openAnchor: null } }));
+    set((s) => ({ doc, past: [], future: [], libraryId, loadId: s.loadId + 1 }));
+    set((s) => ({ ui: { ...s.ui, activeLevel: defaultLevel(doc), selection: null, multi: [], tourIndex: 0, openAnchor: null } }));
   },
-  setUi: (p) => set((s) => ({ ui: { ...s.ui, ...p } })),
+  setUi: (p) => set((s) => {
+    const next = { ...s.ui, ...p };
+    if ('selection' in p && !('multi' in p)) next.multi = p.selection ? [p.selection] : [];
+    return { ui: next };
+  }),
   setLibraryId: (id) => set({ libraryId: id }),
   toast: (msg) => {
     set((s) => ({ ui: { ...s.ui, toast: msg } }));

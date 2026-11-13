@@ -30,8 +30,20 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
+  engines:
+    # Share links must regenerate bit-identically in every browser engine.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright-core install --with-deps chromium firefox webkit
+      - run: npm run test:engines
   deploy:
-    needs: build
+    needs: [build, engines]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

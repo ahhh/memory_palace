@@ -2,24 +2,30 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Html, Line } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
-import type { CollectionKey, Id, V2 } from '../model/schema';
+import type { Id, V2 } from '../model/schema';
+import type { Selection } from '../editor/store';
 import { useStore } from '../editor/store';
 import { useActiveLevel } from './hooks';
 import { snapPoint, type Snap } from '../editor/snap';
-import { furnitureContains, nearestWall, pickAt } from '../editor/pick';
+import { endpointNear, furnitureContains, nearestWall, pickAt, pickInRect } from '../editor/pick';
 import {
-  addAnchor, addOpening, addRoomRect, addWall, deleteEntity, moveAnchor, openingFits, placeFurniture,
+  addAnchor, addOpening, addRoomRect, addWall, deleteEntity, isMovable, moveVertex, openingFits, placeFurniture, translateSelection,
 } from '../editor/commands';
 import { byLevel, wallDir, wallPoint } from '../model/queries';
 import { centroid, dist, polygonArea } from '../model/geometry2d';
 import { OPENING_DEFAULTS } from '../model/defaults';
-import { q, q2 } from '../model/units';
+import { q } from '../model/units';
 import { CATALOG } from '../catalog/furniture';
 import { MeshBuilder } from '../geom/meshBuilder';
 import { addFurnitureItem } from '../geom/levelMesh';
 import { badGhostMat, ghostMat, ghostVertexMat } from './materials';
 
 const SEL = '#2f80ed';
+
+type Gesture =
+  | { type: 'move'; start: V2; delta: V2 }
+  | { type: 'vertex'; from: V2; to: V2 }
+  | { type: 'marquee'; a: V2; b: V2; add: boolean };
 
 /** Furniture placement helper: rotate to back onto a nearby wall and sit flush against it. */
 function alignToWall(doc: ReturnType<typeof useStore.getState>['doc'], level: Id, cat: string, p: V2, rot: number): { p: V2; rot: number } {
@@ -49,17 +55,21 @@ export function BuildLayer() {
   const [snap, setSnap] = useState<Snap | null>(null);
   const [chain, setChain] = useState<V2 | null>(null);
   const [rectStart, setRectStart] = useState<V2 | null>(null);
-  const [rot, setRot] = useState(0);
-  const drag = useRef<{ kind: CollectionKey; id: Id; off: V2 } | null>(null);
-  const [dragPos, setDragPos] = useState<V2 | null>(null);
+  const rot = ui.placeRot;
+  const gRef = useRef<Gesture | null>(null);
+  const [gesture, setGestureState] = useState<Gesture | null>(null);
+  const setGesture = (g: Gesture | null) => { gRef.current = g; setGestureState(g); };
   const y = (level?.elevation ?? 0) + 0.02;
 
   useEffect(() => { setChain(null); setRectStart(null); }, [tool, level?.id]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('input,textarea,select')) return;
+      if ((e.target as HTMLElement)?.closest?.('input,textarea,select')) return;
       if (e.key === 'Escape') { setChain(null); setRectStart(null); }
-      if (e.key === 'r' || e.key === 'R') setRot((r) => (r + (e.shiftKey ? 15 : 90)) % 360);
+      if ((e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey) {
+        const st = useStore.getState();
+        st.setUi({ placeRot: (st.ui.placeRot + (e.shiftKey ? 15 : 90)) % 360 });
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -75,9 +85,15 @@ export function BuildLayer() {
   const onMove = (e: ThreeEvent<PointerEvent>) => {
     const raw = toPlan(e);
     setUi({ cursor: raw });
-    if (drag.current && tool === 'select') {
-      const s = doSnap([raw[0] - drag.current.off[0], raw[1] - drag.current.off[1]], e);
-      setDragPos(s.kind === 'endpoint' || s.kind === 'wall' ? [q(raw[0] - drag.current.off[0]), q(raw[1] - drag.current.off[1])] : s.p);
+    const g = gRef.current;
+    if (g && tool === 'select') {
+      const free = !ui.snap || e.nativeEvent.altKey;
+      if (g.type === 'move') {
+        const step = free ? 0.01 : ui.grid;
+        setGesture({ ...g, delta: [q(Math.round((raw[0] - g.start[0]) / step) * step), q(Math.round((raw[1] - g.start[1]) / step) * step)] });
+      } else if (g.type === 'vertex') {
+        setGesture({ ...g, to: snapPoint(doc, L, raw, { grid: ui.grid, free }).p });
+      } else setGesture({ ...g, b: raw });
       return;
     }
     setSnap(doSnap(raw, e, tool === 'wall' ? chain : null));
@@ -93,13 +109,30 @@ export function BuildLayer() {
     const s = doSnap(raw, e, tool === 'wall' ? chain : null);
     switch (tool) {
       case 'select': {
+        const shift = e.nativeEvent.shiftKey;
+        // 1. Corner handles of selected walls.
+        const wallIds = ui.multi.filter((m) => m.kind === 'walls').map((m) => m.id);
+        const corner = !shift && endpointNear(doc, wallIds, raw, 0.3);
+        if (corner) { setGesture({ type: 'vertex', from: corner, to: corner }); break; }
         const hit = pickAt(doc, L, raw);
-        setUi({ selection: hit });
-        if (hit && (hit.kind === 'furniture' || hit.kind === 'anchors')) {
-          const pos = hit.kind === 'furniture' ? doc.furniture[hit.id].pos : [doc.anchors[hit.id].pos[0], doc.anchors[hit.id].pos[2]] as V2;
-          drag.current = { kind: hit.kind, id: hit.id, off: [raw[0] - pos[0], raw[1] - pos[1]] };
-          setDragPos(pos);
+        if (!hit) {
+          // 2. Empty space: box-select.
+          if (!shift) setUi({ selection: null });
+          setGesture({ type: 'marquee', a: raw, b: raw, add: shift });
+          break;
         }
+        const has = ui.multi.some((m) => m.id === hit.id);
+        if (shift) {
+          // 3. Shift-click toggles membership.
+          const multi = has ? ui.multi.filter((m) => m.id !== hit.id) : [...ui.multi, hit];
+          setUi({ selection: multi.at(-1) ?? null, multi });
+          break;
+        }
+        // 4. Click (and drag) the whole selection, or a new single item.
+        if (has) setUi({ selection: hit, multi: ui.multi });
+        else setUi({ selection: hit });
+        const multi = has ? ui.multi : [hit];
+        if (multi.some((m) => isMovable(m.kind))) setGesture({ type: 'move', start: raw, delta: [0, 0] });
         break;
       }
       case 'wall': {
@@ -128,6 +161,7 @@ export function BuildLayer() {
         let id: Id = '';
         commit('Furniture', (d) => { id = placeFurniture(d, L, ui.furnitureCat, aligned.p, aligned.rot); });
         setUi({ selection: { kind: 'furniture', id } });
+        void rot;
         break;
       }
       case 'anchor': {
@@ -156,18 +190,19 @@ export function BuildLayer() {
       });
       setRectStart(null);
     }
-    if (drag.current && dragPos) {
-      const { kind, id } = drag.current;
-      const cur = kind === 'furniture' ? doc.furniture[id]?.pos : doc.anchors[id] ? [doc.anchors[id].pos[0], doc.anchors[id].pos[2]] : null;
-      if (cur && dist(cur as V2, dragPos) > 0.005) {
-        commit('Move', (d) => {
-          if (kind === 'furniture') d.furniture[id].pos = q2(dragPos);
-          else moveAnchor(d, id, [dragPos[0], d.anchors[id].pos[1], dragPos[1]]);
-        });
-      }
+    const g = gRef.current;
+    if (g?.type === 'move' && (g.delta[0] || g.delta[1])) {
+      const sels = useStore.getState().ui.multi.filter((m) => isMovable(m.kind));
+      commit('Move', (d) => translateSelection(d, sels, g.delta[0], g.delta[1]));
+    } else if (g?.type === 'vertex' && dist(g.from, g.to) > 0.005) {
+      commit('Move corner', (d) => moveVertex(d, L, g.from, g.to));
+    } else if (g?.type === 'marquee' && dist(g.a, g.b) > 0.1) {
+      const found = pickInRect(doc, L, g.a, g.b);
+      const base = g.add ? ui.multi : [];
+      const multi = [...base, ...found.filter((f) => !base.some((m) => m.id === f.id))];
+      setUi({ selection: multi.at(-1) ?? null, multi });
     }
-    drag.current = null;
-    setDragPos(null);
+    setGesture(null);
     void e;
   };
 
@@ -187,7 +222,7 @@ export function BuildLayer() {
         <meshBasicMaterial visible={false} />
       </mesh>
       {ui.showLabels && <RoomLabels levelId={L} y={y} />}
-      <Selection y={level.elevation} dragPos={dragPos} />
+      <SelectionLayer y={level.elevation} gesture={gesture} levelId={L} h={level.height} />
       {snap && tool !== 'select' && tool !== 'erase' && <SnapMarker p={snap.p} kind={snap.kind} y={y + 0.01} />}
       {tool === 'wall' && chain && snap && <WallPreview a={chain} b={snap.p} y={level.elevation} h={level.height} />}
       {tool === 'room' && rectStart && snap && <RectPreview a={rectStart} b={snap.p} y={level.elevation} h={level.height} />}
@@ -296,17 +331,15 @@ function RoomLabels({ levelId, y }: { levelId: Id; y: number }) {
   );
 }
 
-function Selection({ y, dragPos }: { y: number; dragPos: V2 | null }) {
-  const sel = useStore((s) => s.ui.selection);
+function Highlight({ sel, y, off }: { sel: Selection; y: number; off: V2 }) {
   const doc = useStore((s) => s.doc);
-  if (!sel) return null;
+  const ox = off[0], oz = off[1];
   if (sel.kind === 'furniture') {
     const f = doc.furniture[sel.id];
     const item = f && CATALOG[f.cat];
     if (!f || !item) return null;
-    const p = dragPos ?? f.pos;
     return (
-      <mesh position={[p[0], y + item.dims[2] / 200, p[1]]} rotation={[0, (-f.rot * Math.PI) / 180, 0]}>
+      <mesh position={[f.pos[0] + ox, y + item.dims[2] / 200, f.pos[1] + oz]} rotation={[0, (-f.rot * Math.PI) / 180, 0]}>
         <boxGeometry args={[item.dims[0] / 100 + 0.06, item.dims[2] / 100 + 0.06, item.dims[1] / 100 + 0.06]} />
         <meshBasicMaterial color={SEL} wireframe />
       </mesh>
@@ -320,6 +353,7 @@ function Selection({ y, dragPos }: { y: number; dragPos: V2 | null }) {
       const o = doc.openings[sel.id];
       a = wallPoint(w, o.offset - o.width / 2); b = wallPoint(w, o.offset + o.width / 2);
     }
+    a = [a[0] + ox, a[1] + oz]; b = [b[0] + ox, b[1] + oz];
     const L = dist(a, b);
     const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
     return (
@@ -328,25 +362,55 @@ function Selection({ y, dragPos }: { y: number; dragPos: V2 | null }) {
           <boxGeometry args={[L + 0.04, w.height + 0.04, w.thickness + 0.06]} />
           <meshBasicMaterial color={SEL} wireframe />
         </mesh>
-        <Dim a={a} b={b} y={y + w.height + 0.3} />
+        {sel.kind === 'walls' && [a, b].map((p, i) => (
+          <mesh key={i} position={[p[0], y + w.height + 0.05, p[1]]} rotation={[-Math.PI / 2, 0, 0]}>
+            <circleGeometry args={[0.22, 20]} />
+            <meshBasicMaterial color="#ff7a00" depthTest={false} />
+          </mesh>
+        ))}
       </group>
     );
   }
-  if (sel.kind === 'rooms') {
-    const r = doc.rooms[sel.id];
-    if (!r) return null;
-    const pts = r.polygon.map(([x, z]) => new THREE.Vector3(x, y + 0.08, z));
+  const poly = sel.kind === 'rooms' ? doc.rooms[sel.id]?.polygon : sel.kind === 'slabs' ? doc.slabs[sel.id]?.polygon : null;
+  if (poly) {
+    const pts = poly.map(([x, z]) => new THREE.Vector3(x + ox, y + 0.08, z + oz));
     pts.push(pts[0]);
     return <Line points={pts} color={SEL} lineWidth={3} />;
   }
-  if (sel.kind === 'anchors' && dragPos) {
-    return (
-      <mesh position={[dragPos[0], y + 0.05, dragPos[1]]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.2, 0.3, 24]} />
-        <meshBasicMaterial color={SEL} />
-      </mesh>
-    );
-  }
-  return null;
+  const point: V2 | null = sel.kind === 'anchors' && doc.anchors[sel.id] ? [doc.anchors[sel.id].pos[0], doc.anchors[sel.id].pos[2]]
+    : sel.kind === 'masses' && doc.masses[sel.id] ? doc.masses[sel.id].center
+      : sel.kind === 'stairs' && doc.stairs[sel.id] ? doc.stairs[sel.id].start : null;
+  if (!point) return null;
+  return (
+    <mesh position={[point[0] + ox, y + 0.06, point[1] + oz]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.25, 0.34, 24]} />
+      <meshBasicMaterial color={SEL} depthTest={false} />
+    </mesh>
+  );
 }
 
+function SelectionLayer({ y, gesture, levelId, h }: { y: number; gesture: Gesture | null; levelId: Id; h: number }) {
+  const multi = useStore((s) => s.ui.multi);
+  const doc = useStore((s) => s.doc);
+  const off: V2 = gesture?.type === 'move' ? gesture.delta : [0, 0];
+  return (
+    <group>
+      {multi.map((m) => <Highlight key={m.kind + m.id} sel={m} y={y} off={isMovable(m.kind) ? off : [0, 0]} />)}
+      {gesture?.type === 'move' && (gesture.delta[0] || gesture.delta[1]) ? (
+        <Html position={[gesture.start[0] + off[0], y + h + 0.6, gesture.start[1] + off[1]]} center style={{ pointerEvents: 'none' }}>
+          <div className="dim">Δ {off[0].toFixed(2)}, {off[1].toFixed(2)} m</div>
+        </Html>
+      ) : null}
+      {gesture?.type === 'vertex' && byLevel(doc.walls, levelId).filter((w) => dist(w.a, gesture.from) < 0.011 || dist(w.b, gesture.from) < 0.011).map((w) => {
+        const other = dist(w.a, gesture.from) < 0.011 ? w.b : w.a;
+        return <WallPreview key={w.id} a={other} b={gesture.to} y={y} h={w.height} />;
+      })}
+      {gesture?.type === 'marquee' && (
+        <Line
+          points={[[gesture.a[0], y + 0.1, gesture.a[1]], [gesture.b[0], y + 0.1, gesture.a[1]], [gesture.b[0], y + 0.1, gesture.b[1]], [gesture.a[0], y + 0.1, gesture.b[1]], [gesture.a[0], y + 0.1, gesture.a[1]]]}
+          color={SEL} lineWidth={1.5} dashed dashSize={0.2} gapSize={0.12}
+        />
+      )}
+    </group>
+  );
+}

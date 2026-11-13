@@ -49,3 +49,32 @@ export function nearestWall(doc: PalaceDoc, level: Id, p: V2, maxDist = 0.6) {
   }
   return best;
 }
+
+/** Everything on a level whose reference point(s) fall inside the plan rectangle. */
+export function pickInRect(doc: PalaceDoc, level: Id, a: V2, b: V2): Pick[] {
+  const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), z0 = Math.min(a[1], b[1]), z1 = Math.max(a[1], b[1]);
+  const inside = (p: V2) => p[0] >= x0 && p[0] <= x1 && p[1] >= z0 && p[1] <= z1;
+  const out: Pick[] = [];
+  for (const w of byLevel(doc.walls, level)) if (inside(w.a) && inside(w.b)) out.push({ kind: 'walls', id: w.id });
+  for (const r of byLevel(doc.rooms, level)) if (r.polygon.every(inside)) out.push({ kind: 'rooms', id: r.id });
+  for (const f of byLevel(doc.furniture, level)) if (inside(f.pos)) out.push({ kind: 'furniture', id: f.id });
+  for (const an of byLevel(doc.anchors, level)) if (inside([an.pos[0], an.pos[2]])) out.push({ kind: 'anchors', id: an.id });
+  for (const m of byLevel(doc.masses, level)) if (inside(m.center)) out.push({ kind: 'masses', id: m.id });
+  for (const s of byLevel(doc.stairs, level)) if (inside(s.start)) out.push({ kind: 'stairs', id: s.id });
+  for (const s of byLevel(doc.slabs, level)) if (s.polygon.every(inside)) out.push({ kind: 'slabs', id: s.id });
+  return out;
+}
+
+/** A wall endpoint of one of `wallIds` within `r` of p. */
+export function endpointNear(doc: PalaceDoc, wallIds: Id[], p: V2, r = 0.3): V2 | null {
+  let best: V2 | null = null, bd = r;
+  for (const id of wallIds) {
+    const w = doc.walls[id];
+    if (!w) continue;
+    for (const e of [w.a, w.b]) {
+      const d = dist(e, p);
+      if (d < bd) { bd = d; best = e; }
+    }
+  }
+  return best;
+}

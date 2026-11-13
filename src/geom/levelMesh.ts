@@ -19,6 +19,8 @@ export interface LevelMeshOpts {
   /** Draw every wall at cutHeight. */
   allCut?: boolean;
   furniture?: boolean;
+  /** Furniture categories drawn elsewhere (detailed models). */
+  skipCat?: (cat: string) => boolean;
 }
 
 export interface LevelMeshes { solid: THREE.BufferGeometry; glass: THREE.BufferGeometry }
@@ -216,8 +218,9 @@ export function addFurnitureItem(mb: MeshBuilder, cat: string, x: number, y: num
   }
 }
 
-function addFurniture(mb: MeshBuilder, doc: PalaceDoc, level: Level) {
+function addFurniture(mb: MeshBuilder, doc: PalaceDoc, level: Level, skip?: (cat: string) => boolean) {
   for (const f of byLevel(doc.furniture, level.id)) {
+    if (skip?.(f.cat)) continue;
     addFurnitureItem(mb, f.cat, f.pos[0], level.elevation + (f.dy ?? 0), f.pos[1], f.rot);
   }
 }
@@ -230,7 +233,7 @@ export function buildLevelMeshes(doc: PalaceDoc, level: Level, opts: LevelMeshOp
   addWalls(mb, glass, doc, level, opts);
   addStairs(mb, doc, level);
   addMasses(mb, doc, level);
-  if (opts.furniture !== false) addFurniture(mb, doc, level);
+  if (opts.furniture !== false) addFurniture(mb, doc, level, opts.skipCat);
   return { solid: mb.build(), glass: glass.build() };
 }
 

@@ -2,31 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { GENERATORS, generate } from './registry';
-import type { Recipe, StyleId } from '../model/schema';
+import type { StyleId } from '../model/schema';
 import { unreachableRooms, validate } from '../model/validate';
 import { docHash } from '../share/hash';
 import { deepEqual } from '../share/deepEqual';
 import { suggestJourney } from '../journey/suggest';
 
 const FIXTURES = fileURLToPath(new URL('./__fixtures__/hashes.json', import.meta.url));
-const SEEDS = Array.from({ length: 12 }, (_, i) => `seed-${i}`);
-const PARAM_SETS: Record<StyleId, Record<string, string>[]> = {
-  condo: [{}, { bedrooms: '0' }, { bedrooms: '3', corner: '1' }],
-  family: [{}, { floors: '1', bedrooms: '3' }, { floors: '2', bedrooms: '5', garage: '1' }],
-  prairie: [{ variant: 'robie' }, { variant: 'fallingwater' }, { variant: 'usonian' }],
-  mansion: [{}, { floors: '3', court: '1' }, { floors: '2', court: '0' }],
-};
-
-function recipes(): Recipe[] {
-  const out: Recipe[] = [];
-  for (const style of Object.keys(GENERATORS) as StyleId[]) {
-    for (const ver of Object.keys(GENERATORS[style]!).map(Number)) {
-      for (const params of PARAM_SETS[style]) for (const seed of SEEDS) out.push({ style, ver, seed, params });
-    }
-  }
-  return out;
-}
-const key = (r: Recipe) => `${r.style}@${r.ver}/${r.seed}/${JSON.stringify(r.params)}`;
+import { PARAM_SETS, SEEDS, fixtureKey as key, fixtureRecipes as recipes } from './fixtureRecipes';
 
 describe('generators', () => {
   const all = recipes();
@@ -62,6 +45,45 @@ describe('generators', () => {
       const j = suggestJourney(doc);
       expect(j.length).toBeGreaterThan(3);
       expect(new Set(j.map((a) => a.room)).size).toBeGreaterThan(Math.min(5, Object.keys(doc.rooms).length / 2));
+    }
+  });
+});
+
+describe('generator options', () => {
+  const extWalls = (style: StyleId, params: Record<string, string>, seed: string) => {
+    const doc = generate({ style, ver: 1, seed, params });
+    const ground = Object.values(doc.levels).find((l) => l.index === 0)!;
+    return Object.values(doc.walls).filter((w) => w.level === ground.id && w.exterior)
+      .map((w) => [Math.min(w.a[0], w.b[0]), Math.max(w.a[0], w.b[0]), Math.min(w.a[1], w.b[1]), Math.max(w.a[1], w.b[1])]);
+  };
+  /** Every exterior wall has a mirror twin across the vertical axis through the house. */
+  const isMirrorSymmetric = (walls: number[][]) => {
+    const minX = Math.min(...walls.map((w) => w[0])), maxX = Math.max(...walls.map((w) => w[1]));
+    const axis2 = minX + maxX;
+    const key = (w: number[]) => w.map((v) => Math.round(v * 100)).join(',');
+    const set = new Set(walls.map(key));
+    return walls.every((w) => set.has(key([axis2 - w[1], axis2 - w[0], w[2], w[3]])));
+  };
+
+  it.each([
+    ['family', { symmetric: '1' }], ['family', { symmetric: '1', floors: '1' }],
+    ['condo', { symmetric: '1' }], ['condo', { symmetric: '1', bedrooms: '0' }],
+    ['prairie', { symmetric: '1' }], ['mansion', {}],
+  ] as const)('%s %j has a mirror-symmetric outline for every seed', (style, params) => {
+    for (const seed of SEEDS) expect(isMirrorSymmetric(extWalls(style, params, seed))).toBe(true);
+  });
+
+  it('symmetric=0 makes mansions asymmetric', () => {
+    expect(SEEDS.every((seed) => !isMirrorSymmetric(extWalls('mansion', { symmetric: '0' }, seed)))).toBe(true);
+  });
+
+  it('furniture=0 builds the bare architecture', () => {
+    for (const style of Object.keys(GENERATORS) as StyleId[]) {
+      const bare = generate({ style, ver: 1, seed: 'bare', params: { furniture: '0' } });
+      const full = generate({ style, ver: 1, seed: 'bare', params: {} });
+      expect(Object.keys(bare.furniture)).toHaveLength(0);
+      expect(Object.keys(full.furniture).length).toBeGreaterThan(0);
+      expect(Object.keys(bare.walls)).toEqual(Object.keys(full.walls));
     }
   });
 });

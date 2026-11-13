@@ -10,6 +10,7 @@ const bannedMath = ['random', 'sin', 'cos', 'tan', 'atan', 'atan2', 'asin', 'aco
 export default tseslint.config(
   { ignores: ['dist', 'node_modules'] },
   js.configs.recommended,
+  { files: ['scripts/**/*.mjs'], languageOptions: { globals: { ...globals.node, window: 'readonly' } } },
   ...tseslint.configs.recommended,
   {
     files: ['src/**/*.{ts,tsx}'],

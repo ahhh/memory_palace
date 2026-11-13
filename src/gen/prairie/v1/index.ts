@@ -36,21 +36,25 @@ function hearthChimney(b: DocBuilder, level: Id, x: number, z: number, height: n
 export function generate(recipe: Recipe): PalaceDoc {
   const rng = makeRng('prairie/1/' + recipe.seed);
   const prog = rng.fork('program');
-  const variant = recipe.params.variant ?? prog.pick(PARAMS.variant);
+  const sym = recipe.params.symmetric === '1';
+  const picked = recipe.params.variant ?? prog.pick(PARAMS.variant);
+  // Symmetric prairie = a Winslow-House-style composition of the long, low bars.
+  const variant = sym && !recipe.params.variant ? 'robie' : picked;
   const b = new DocBuilder({ name: prog.pick(NAMES[variant] ?? NAMES.robie), style: 'prairie', origin: recipe });
   if (variant === 'fallingwater') fallingwater(b, rng);
   else if (variant === 'usonian') usonian(b, rng);
-  else robie(b, rng);
+  else robie(b, rng, sym);
   return b.doc;
 }
 
 /* ───────────────────────────── Robie: long offset bars ───────────────────────────── */
-function robie(b: DocBuilder, rng: Rng) {
+function robie(b: DocBuilder, rng: Rng, sym = false) {
   const d = rng.fork('dims');
   const LA = d.step(2200, 2800, 20), DA = d.step(740, 800, 20);
   const xA0 = -Math.round(LA / 20) * 10, xA1 = xA0 + LA, zA0 = -Math.round(DA / 20) * 10, zA1 = zA0 + DA;
   const coreW = 420;
-  const [, cut] = splitSpan(xA0, xA1 - coreW, [52, 48]);
+  const [, cutRoll] = splitSpan(xA0, xA1 - coreW, [52, 48]);
+  const cut = sym ? xA0 + Math.round((LA - coreW) / 20) * 10 : cutRoll;
   const c0 = cut, c1 = cut + coreW;
   const ext = d.pick(['roman', 'roman', 'stucco']);
   const mats = { ext, int: 'plaster' };
@@ -64,40 +68,49 @@ function robie(b: DocBuilder, rng: Rng) {
   const blockers = [grow(st, 10)];
   const hearth = R(c0 - 15 - 90, -110, c0 - 15, 110);
   hearthChimney(b, L0, cx(hearth), cz(hearth), 150, ext === 'stucco' ? 'fieldstone' : 'roman');
+  // Symmetric: twin hearths flank the core.
+  const hearth2 = R(c1 + 15, -110, c1 + 15 + 90, 110);
+  if (sym) hearthChimney(b, L0, cx(hearth2), cz(hearth2), 150, ext === 'stucco' ? 'fieldstone' : 'roman');
 
   // Service wing behind the dining room.
   const bw = d.step(900, 1200, 20), bd = d.step(560, 640, 20);
-  const B = R(c1, zA0 - bd, Math.min(xA1, c1 + bw), zA0);
-  const svc = partition(B, [45, 20, 35], 'x');
+  const hb = Math.round(bw / 20) * 10;
+  const B = sym ? R(-hb, zA0 - bd, hb, zA0) : R(c1, zA0 - bd, Math.min(xA1, c1 + bw), zA0);
+  const sw = Math.round((hb * 2 * 35) / 1000) * 10;
+  const svc = sym
+    ? [R(-hb, B.z0, -hb + sw, B.z1), R(-hb + sw, B.z0, hb - sw, B.z1), R(hb - sw, B.z0, hb, B.z1)]
+    : partition(B, [45, 20, 35], 'x');
 
   const r0: RoomSpec[] = [
     room(R(xA0, zA0, c0, zA1), 'living', 'Living room', 'oak'),
     room(R(c0, zA0, c1, zA1), 'hall', 'Stair hall', 'oak'),
     room(R(c1, zA0, xA1, zA1), 'dining', 'Dining room', 'oak'),
-    room(svc[0], 'kitchen', 'Kitchen', 'tile'),
-    room(svc[1], 'laundry', 'Pantry', 'tile'),
-    room(svc[2], 'office', "Guest room", 'oak'),
+    ...(sym
+      ? [room(svc[0], 'office', 'Guest room', 'oak'), room(svc[1], 'kitchen', 'Kitchen', 'tile'), room(svc[2], 'laundry', 'Pantry', 'tile')]
+      : [room(svc[0], 'kitchen', 'Kitchen', 'tile'), room(svc[1], 'laundry', 'Pantry', 'tile'), room(svc[2], 'office', 'Guest room', 'oak')]),
   ];
+  const hearths = sym ? [grow(hearth, 30), grow(hearth2, 30)] : [grow(hearth, 30)];
   const p0 = buildLevel(b, L0, H, r0, mats);
   const dr = rng.fork('doors');
-  placeExteriorDoor(b, p0, 1, ['N'], 100, 220, dr, blockers);
+  placeExteriorDoor(b, p0, 1, [sym ? 'S' : 'N'], 100, 220, dr, blockers);
   placeExteriorDoor(b, p0, 0, ['S'], 160, 220, dr, blockers);
   placeExteriorDoor(b, p0, 2, ['S'], 160, 220, dr, blockers);
-  placeDoors(b, p0, dr, doorPolicy, [...blockers, grow(hearth, 30)]);
+  placeDoors(b, p0, dr, doorPolicy, [...blockers, ...hearths]);
   placeWindows(b, p0, (r) => (r.type === 'hall' ? RIBBON(60, 100, 120, 10) : r.type === 'laundry' ? null : RIBBON(90, 130, 90, 10)));
-  furnishLevel(b, p0, rng.fork('furnish0'), [...blockers, grow(hearth, 20)]);
+  furnishLevel(b, p0, rng.fork('furnish0'), [...blockers, grow(hearth, 20), ...(sym ? [grow(hearth2, 20)] : [])]);
 
   // Upper bar centered on the core.
-  const C = R(Math.max(xA0 + 200, c0 - d.step(600, 800, 20)), zA0, Math.min(xA1 - 200, c1 + d.step(700, 900, 20)), zA1);
+  const wl = d.step(600, 800, 20), wr = d.step(700, 900, 20);
+  const C = sym ? R(c0 - wl, zA0, c1 + wl, zA1) : R(Math.max(xA0 + 200, c0 - wl), zA0, Math.min(xA1 - 200, c1 + wr), zA1);
   // Split front/back so every room touches the core (the stair hugs its west wall).
   const left = partition(R(C.x0, C.z0, c0, C.z1), [38, 62], 'z');
-  const right = partition(R(c1, C.z0, C.x1, C.z1), [50, 50], 'z');
+  const right = partition(R(c1, C.z0, C.x1, C.z1), sym ? [38, 62] : [50, 50], 'z');
   const r1: RoomSpec[] = [
     room(left[0], 'bath', 'Bathroom', 'tile'),
     room(left[1], 'bedroom', 'Main bedroom', 'oak'),
     room(R(c0, C.z0, c1, C.z1), 'hall', 'Landing', 'oak'),
-    room(right[0], 'bedroom', 'Bedroom 2', 'oak'),
-    room(right[1], 'bedroom', 'Bedroom 3', 'oak'),
+    room(right[0], 'bedroom', sym ? 'Bedroom 3' : 'Bedroom 2', 'oak'),
+    room(right[1], 'bedroom', sym ? 'Bedroom 2' : 'Bedroom 3', 'oak'),
   ];
   const p1 = buildLevel(b, L1, H, r1, mats);
   placeDoors(b, p1, rng.fork('doors1'), doorPolicy, blockers);
@@ -107,22 +120,26 @@ function robie(b: DocBuilder, rng: Rng) {
 
   // Roofs: wide flat lower roof cantilevered past the living room; low hips above.
   const ov = d.step(200, 300, 20);
-  b.roof(L0, R(xA0 - 500, zA0, xA1, zA1), 'flat', 0, ov, H, 18, 'copper');
+  b.roof(L0, R(xA0 - 500, zA0, sym ? xA1 + 500 : xA1, zA1), 'flat', 0, ov, H, 18, 'copper');
   b.roof(L0, B, 'hip', 15, 140, H, 18, 'copper');
   b.roof(L1, C, 'hip', 15, ov, LV + H, 18, 'copper');
   // Porch beyond the living room under the cantilever, terrace along the south.
   b.slab(L0, R(xA0 - 500, zA0 + 120, xA0 - 15, zA1 - 120), 'terrace', 30, 0, true, 'stucco');
-  b.slab(L0, R(xA0 - 200, zA1 + 15, c1 + 200, zA1 + 15 + 360), 'terrace', 30, 0, true, 'stucco');
-  for (const [x, z] of [[xA0 - 200, zA1 + 330], [c1 + 170, zA1 + 330]]) b.mass(L0, x, z, 90, 70, 90, 0, 'stucco');
+  const tx1 = sym ? xA1 + 200 : c1 + 200;
+  if (sym) b.slab(L0, R(xA1 + 15, zA0 + 120, xA1 + 500, zA1 - 120), 'terrace', 30, 0, true, 'stucco');
+  b.slab(L0, R(xA0 - 200, zA1 + 15, tx1, zA1 + 15 + 360), 'terrace', 30, 0, true, 'stucco');
+  for (const [x, z] of [[xA0 - 200, zA1 + 330], [tx1 - 30, zA1 + 330]]) b.mass(L0, x, z, 90, 70, 90, 0, 'stucco');
 
   // Site: long lot, reflecting pond along the facade, hedges.
   const s = rng.fork('site');
   const SW = LA + 2800, SD = DA + bd + 3000;
   setSite(b, SW, SD, 'grass', s.int(0, 30), s.int(1, 9999));
   const pz = zA1 + 15 + 360 + 400;
-  b.pond([[xA0, pz - 150], [c1 + 200, pz - 150], [c1 + 200, pz + 150], [xA0, pz + 150]], -15, 50, false);
-  row(b, 'hedge', xA0 - 500, pz + 350, xA1, pz + 350, Math.floor((xA1 - xA0 + 500) / 120), 90);
-  b.slab(L0, R(c0 + 100, zA0 - SD / 2 + 600, c1 - 100, zA0 - 15), 'path', 6, 2, false, 'gravel');
+  const px0 = sym ? xA0 + 300 : xA0, px1 = sym ? xA1 - 300 : c1 + 200;
+  b.pond([[px0, pz - 150], [px1, pz - 150], [px1, pz + 150], [px0, pz + 150]], -15, 50, false);
+  row(b, 'hedge', xA0 - 500, pz + 350, sym ? xA1 + 500 : xA1, pz + 350, Math.floor((xA1 - xA0 + (sym ? 1000 : 500)) / 120) + (sym ? 1 : 0), 90);
+  if (sym) b.slab(L0, R(c0 + 100, zA1 + 15, c1 - 100, SD / 2), 'path', 6, 2, false, 'gravel');
+  else b.slab(L0, R(c0 + 100, zA0 - SD / 2 + 600, c1 - 100, zA0 - 15), 'path', 6, 2, false, 'gravel');
   scatter(b, s, s.int(10, 16), R(-SW / 2 + 200, -SD / 2 + 200, SW / 2 - 200, SD / 2 - 200),
     [grow(R(xA0 - 500, B.z0, xA1, pz + 400), 200)], ['tree', 'tree', 'shrub']);
 }

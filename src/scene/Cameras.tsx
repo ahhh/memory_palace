@@ -7,9 +7,45 @@ import { useStore } from '../editor/store';
 import { useActiveLevel, useBounds, useHeightFn } from './hooks';
 import { buildColliders, groundAt, levelAtHeight, resolve, type Seg } from '../walk/collision';
 import { anchorNode, OUT, roomGraph, routeBetween } from '../journey/graph';
+import { camBus, isTouchDevice } from './bus';
 import { doorLinks } from '../model/queries';
 
 const EYE = 1.6;
+
+const CAM_KEYS = new Set(['Home', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyQ', 'KeyE', 'Equal', 'NumpadAdd', 'Minus', 'NumpadSubtract', 'ShiftLeft', 'ShiftRight']);
+
+/** Held camera keys, ignoring typing in fields and open dialogs. */
+function useCameraKeys() {
+  const keys = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    const typing = (e: KeyboardEvent) => !!(e.target as HTMLElement)?.closest?.('input,textarea,select') || !!useStore.getState().ui.dialog;
+    const down = (e: KeyboardEvent) => {
+      if (typing(e) || e.metaKey || e.ctrlKey || !CAM_KEYS.has(e.code)) return;
+      keys.current[e.code] = true;
+      if (e.code.startsWith('Arrow')) e.preventDefault();
+    };
+    const up = (e: KeyboardEvent) => { keys.current[e.code] = false; };
+    const clear = () => { keys.current = {}; };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', clear);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', clear); };
+  }, []);
+  return keys;
+}
+
+/** Ground-plane pan vector from arrow keys, relative to where the camera looks. */
+function arrowPan(k: Record<string, boolean>, cam: THREE.Camera, target: THREE.Vector3, dist: number): THREE.Vector3 | null {
+  const f = (k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0);
+  const r = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0);
+  if (!f && !r) return null;
+  const fwd = target.clone().sub(cam.position).setY(0);
+  if (fwd.lengthSq() < 1e-6) cam.getWorldDirection(fwd).setY(0);
+  if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+  fwd.normalize();
+  const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+  return fwd.multiplyScalar(f).add(right.multiplyScalar(r)).normalize().multiplyScalar(dist);
+}
 
 function BuildCamera() {
   const bounds = useBounds();
@@ -18,7 +54,21 @@ function BuildCamera() {
   // Frame the house once when entering Build; edits must not move the camera.
   const [init] = useState(() => ({ b: bounds, zoom: Math.min(size.width, size.height) / (bounds.size * 1.35) }));
   const controls = useRef<React.ComponentRef<typeof MapControls>>(null);
+  const keys = useCameraKeys();
   const y = level?.elevation ?? 0;
+  useFrame((_, dt) => {
+    const c = controls.current;
+    if (!c || useStore.getState().ui.multi.length) return; // arrows nudge the selection instead
+    const cam = c.object as THREE.OrthographicCamera;
+    const k = keys.current;
+    // Screen-up is -z in the plan view; pan speed is constant on screen.
+    const dx = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0), dz = (k.ArrowDown ? 1 : 0) - (k.ArrowUp ? 1 : 0);
+    if (!dx && !dz) return;
+    const sp = (600 / cam.zoom) * Math.min(dt, 0.05) * (k.ShiftLeft || k.ShiftRight ? 2.5 : 1);
+    c.target.x += dx * sp; c.target.z += dz * sp;
+    cam.position.x += dx * sp; cam.position.z += dz * sp;
+    c.update();
+  });
   // Keep the camera above the active floor when switching floors.
   useEffect(() => {
     const c = controls.current;
@@ -40,6 +90,7 @@ function BuildCamera() {
         maxPolarAngle={0}
         screenSpacePanning
         mouseButtons={{ LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }}
+        touches={{ ONE: -1 as unknown as THREE.TOUCH, TWO: THREE.TOUCH.DOLLY_PAN }}
         minZoom={4}
         maxZoom={400}
       />
@@ -52,11 +103,65 @@ function ExploreCamera() {
   const level = useActiveLevel();
   const [b] = useState(bounds);
   const [ty] = useState((level?.elevation ?? 0) + 1);
-  const d = b.size;
+  const aspect = useThree((s) => s.size.width / Math.max(1, s.size.height));
+  // Portrait phones see less width, so start further back.
+  const [d] = useState(() => b.size * Math.max(1, Math.min(2.2, 1.25 / aspect)));
+  const controls = useRef<React.ComponentRef<typeof OrbitControls>>(null);
+  const home = useMemo(() => ({ pos: new THREE.Vector3(b.cx + d * 1.15, b.top + d * 1.05, b.cz + d * 1.55), target: new THREE.Vector3(b.cx, ty, b.cz) }), [b, d, ty]);
+  // Pending tap-button orbit changes, eased in over a few frames.
+  const pending = useRef({ theta: 0, phi: 0, zoom: 1, reset: false });
+  useEffect(() => camBus.on((e) => {
+    if (e.type !== 'orbit') return;
+    const p = pending.current;
+    if (e.reset) p.reset = true;
+    p.theta += e.dTheta ?? 0;
+    p.phi += e.dPhi ?? 0;
+    p.zoom *= e.zoom ?? 1;
+  }), []);
+  const keys = useCameraKeys();
+  useFrame((_, dt) => {
+    const c = controls.current;
+    if (!c) return;
+    const p = pending.current;
+    const cam = c.object;
+    // Keyboard: arrows pan, Shift+arrows orbit/tilt, Q/E rotate, +/− zoom.
+    const k = keys.current;
+    const step = Math.min(dt, 0.05);
+    const shift = k.ShiftLeft || k.ShiftRight;
+    if (shift) {
+      p.theta += ((k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0)) * 1.6 * step;
+      p.phi += ((k.ArrowDown ? 1 : 0) - (k.ArrowUp ? 1 : 0)) * 1.0 * step;
+    } else {
+      const radius = cam.position.distanceTo(c.target);
+      const pan = arrowPan(k, cam, c.target, Math.max(4, radius) * 0.8 * step);
+      if (pan) { c.target.add(pan); cam.position.add(pan); c.update(); }
+    }
+    p.theta += ((k.KeyQ ? 1 : 0) - (k.KeyE ? 1 : 0)) * 1.6 * step;
+    if (k.Equal || k.NumpadAdd) p.zoom *= Math.pow(0.35, step);
+    if (k.Minus || k.NumpadSubtract) p.zoom *= Math.pow(1 / 0.35, step);
+    if (k.Home) { k.Home = false; p.reset = true; }
+    if (p.reset) {
+      p.reset = false; p.theta = 0; p.phi = 0; p.zoom = 1;
+      cam.position.copy(home.pos); c.target.copy(home.target); c.update();
+      return;
+    }
+    if (Math.abs(p.theta) < 1e-4 && Math.abs(p.phi) < 1e-4 && Math.abs(p.zoom - 1) < 1e-4) return;
+    const ease = Math.min(1, dt * 8);
+    const off = cam.position.clone().sub(c.target);
+    const sph = new THREE.Spherical().setFromVector3(off);
+    const dth = p.theta * ease, dph = p.phi * ease;
+    const z = Math.pow(p.zoom, ease);
+    sph.theta += dth;
+    sph.phi = Math.min(1.5, Math.max(0.08, sph.phi + dph));
+    sph.radius = Math.min(d * 6, Math.max(2, sph.radius * z));
+    p.theta -= dth; p.phi -= dph; p.zoom /= z;
+    cam.position.copy(c.target).add(new THREE.Vector3().setFromSpherical(sph));
+    c.update();
+  });
   return (
     <>
-      <PerspectiveCamera makeDefault fov={40} position={[b.cx + d * 1.15, b.top + d * 1.05, b.cz + d * 1.55]} near={0.1} far={3000} />
-      <OrbitControls makeDefault target={[b.cx, ty, b.cz]} maxPolarAngle={1.5} enableDamping dampingFactor={0.12} minDistance={2} maxDistance={Math.max(60, d * 6)} />
+      <PerspectiveCamera makeDefault fov={40} position={home.pos.toArray()} near={0.1} far={3000} />
+      <OrbitControls ref={controls} makeDefault target={home.target.toArray()} maxPolarAngle={1.5} enableDamping dampingFactor={0.12} minDistance={2} maxDistance={Math.max(60, d * 6)} />
     </>
   );
 }
@@ -117,31 +222,93 @@ function WalkCamera() {
   const cam = useRef<THREE.PerspectiveCamera>(null);
   const doc = useStore((s) => s.doc);
   const setUi = useStore((s) => s.setUi);
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
   const segs = useColliders();
   const height = useHeightFn();
   const keys = useRef<Record<string, boolean>>({});
   const feet = useRef(0);
   const lastCard = useRef<string | null>(null);
+  const [touch] = useState(isTouchDevice);
+  // Touch mode keeps its own yaw/pitch; targets are set by taps and buttons (no holding needed).
+  const look = useRef({ yaw: 0, pitch: 0, yawTarget: 0 });
+  const goal = useRef<{ p: V2; stuck: number } | null>(null);
 
   useEffect(() => {
     const camera = cam.current!;
     const sp = spawnPoint(useStore.getState().doc, segs);
     camera.position.set(...sp.eye);
     camera.lookAt(...sp.look);
+    const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+    look.current = { yaw: e.y, pitch: e.x, yawTarget: e.y };
     feet.current = sp.eye[1] - EYE;
-    const down = (e: KeyboardEvent) => { keys.current[e.code] = true; };
-    const up = (e: KeyboardEvent) => { keys.current[e.code] = false; };
+    const down = (ev: KeyboardEvent) => { keys.current[ev.code] = true; };
+    const up = (ev: KeyboardEvent) => { keys.current[ev.code] = false; };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
-    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+    const off = camBus.on((ev) => {
+      const camera = cam.current;
+      if (!camera) return;
+      if (ev.type === 'turn') look.current.yawTarget += (ev.deg * Math.PI) / 180;
+      if (ev.type === 'step') {
+        const yaw = look.current.yawTarget;
+        const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+        goal.current = { p: [camera.position.x + fx * ev.dist, camera.position.z + fz * ev.dist], stuck: 0 };
+      }
+    });
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); off(); };
      
   }, []);
+
+  // Touch: swipe to look around, tap the floor to walk there.
+  useEffect(() => {
+    if (!touch) return;
+    const el = gl.domElement;
+    let start: { x: number; y: number; t: number; lx: number; ly: number } | null = null;
+    const ray = new THREE.Raycaster();
+    const onDown = (e: PointerEvent) => { start = { x: e.clientX, y: e.clientY, t: performance.now(), lx: e.clientX, ly: e.clientY }; };
+    const onMove = (e: PointerEvent) => {
+      if (!start) return;
+      const dx = e.clientX - start.lx, dy = e.clientY - start.ly;
+      start.lx = e.clientX; start.ly = e.clientY;
+      look.current.yaw += dx * 0.005;
+      look.current.yawTarget = look.current.yaw;
+      look.current.pitch = Math.max(-1.2, Math.min(1.2, look.current.pitch + dy * 0.005));
+    };
+    const onUp = (e: PointerEvent) => {
+      const s = start;
+      start = null;
+      const camera = cam.current;
+      if (!s || !camera) return;
+      if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > 10 || performance.now() - s.t > 600) return;
+      const r = el.getBoundingClientRect();
+      ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+      const hit = ray.intersectObjects(scene.children, true).find((h) => h.distance > 0.3 && h.face && h.object.type === 'Mesh');
+      if (!hit || hit.distance > 40) return;
+      const n = hit.face!.normal.clone().transformDirection(hit.object.matrixWorld);
+      // Floors: walk to the spot. Walls/furniture: stop half a meter in front of them.
+      const p: V2 = n.y > 0.6 ? [hit.point.x, hit.point.z] : [hit.point.x + n.x * 0.5, hit.point.z + n.z * 0.5];
+      goal.current = { p, stuck: 0 };
+      look.current.yawTarget = Math.atan2(-(p[0] - camera.position.x), -(p[1] - camera.position.z));
+    };
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', () => { start = null; });
+    return () => { el.removeEventListener('pointerdown', onDown); el.removeEventListener('pointermove', onMove); el.removeEventListener('pointerup', onUp); };
+  }, [touch, gl, scene]);
 
   const fwd = new THREE.Vector3();
   useFrame((_, dtRaw) => {
     const camera = cam.current;
     if (!camera) return;
     const dt = Math.min(dtRaw, 0.05);
+    // Ease the touch view toward its yaw target, then apply yaw/pitch.
+    if (touch || goal.current || Math.abs(look.current.yawTarget - look.current.yaw) > 1e-3) {
+      const L = look.current;
+      L.yaw += (L.yawTarget - L.yaw) * Math.min(1, dt * 6);
+      if (touch || Math.abs(L.yawTarget - L.yaw) > 1e-3) camera.quaternion.setFromEuler(new THREE.Euler(L.pitch, L.yaw, 0, 'YXZ'));
+    }
     const k = keys.current;
     const speed = (k.ShiftLeft || k.ShiftRight ? 5.5 : 2.6) * dt;
     camera.getWorldDirection(fwd);
@@ -153,11 +320,24 @@ function WalkCamera() {
     if (k.KeyS || k.ArrowDown) { mx -= fwd.x; mz -= fwd.z; }
     if (k.KeyD || k.ArrowRight) { mx += right.x; mz += right.z; }
     if (k.KeyA || k.ArrowLeft) { mx -= right.x; mz -= right.z; }
-    const l = Math.hypot(mx, mz);
     let p: V2 = [camera.position.x, camera.position.z];
+    const g0 = goal.current;
+    if (g0 && !mx && !mz) {
+      const dx = g0.p[0] - p[0], dz = g0.p[1] - p[1];
+      const dd = Math.hypot(dx, dz);
+      if (dd < 0.15) goal.current = null;
+      else { mx = dx / dd; mz = dz / dd; }
+    } else if (mx || mz) goal.current = null;
+    const l = Math.hypot(mx, mz);
     if (l > 0) {
+      const before = p;
       p = [p[0] + (mx / l) * speed, p[1] + (mz / l) * speed];
       p = resolve(p, 0.25, feet.current, segs);
+      if (goal.current) {
+        const moved = Math.hypot(p[0] - before[0], p[1] - before[1]);
+        goal.current.stuck = moved < speed * 0.25 ? goal.current.stuck + dt : 0;
+        if (goal.current.stuck > 0.35) goal.current = null;
+      }
     }
     const g = groundAt(doc, p, feet.current, height);
     feet.current += (g - feet.current) * Math.min(1, dt * 14);
@@ -178,7 +358,7 @@ function WalkCamera() {
   return (
     <>
       <PerspectiveCamera ref={cam} makeDefault fov={70} near={0.05} far={3000} />
-      <PointerLockControls selector="#walk-start" />
+      {!touch && <PointerLockControls selector="#walk-start" />}
     </>
   );
 }

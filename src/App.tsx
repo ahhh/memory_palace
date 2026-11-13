@@ -5,7 +5,8 @@ import { useStore } from './editor/store';
 import { decodeShare, readHashCode } from './share/codec';
 import { generate } from './gen/registry';
 import { lastOpened, loadFromLibrary, newLibraryId, saveToLibrary } from './library/storage';
-import { deleteEntity } from './editor/commands';
+import { deleteSelection, duplicateSelection, isMovable, translateSelection, type Sel } from './editor/commands';
+import { pickInRect } from './editor/pick';
 import { Building } from './scene/Building';
 import { SiteView } from './scene/SiteView';
 import { Anchors } from './scene/Anchors';
@@ -13,7 +14,7 @@ import { BuildLayer } from './scene/BuildLayer';
 import { Cameras } from './scene/Cameras';
 import { LevelSwitcher, SidePanel, TOOL_KEYS, Toolbar } from './ui/Panels';
 import { HelpDialog, LibraryDialog, NewPalaceDialog, ShareDialog } from './ui/Dialogs';
-import { AnchorCard, StatusBar, Toast, TopBar, TourControls, WalkOverlay } from './ui/Overlays';
+import { AnchorCard, ExploreControls, SheetToggle, StatusBar, Toast, TopBar, TourControls, WalkOverlay } from './ui/Overlays';
 import { useBounds } from './scene/hooks';
 
 const FIRST_PALACE = { style: 'prairie' as const, ver: 1, seed: 'bear-run', params: { variant: 'fallingwater' } };
@@ -66,10 +67,34 @@ function useHotkeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const st = useStore.getState();
-      if ((e.target as HTMLElement)?.closest('input,textarea,select') || st.ui.dialog) return;
+      if ((e.target as HTMLElement)?.closest?.('input,textarea,select') || st.ui.dialog) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) st.redo(); else st.undo(); return; }
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); st.redo(); return; }
+      if (st.ui.mode === 'build') {
+        const multi = st.ui.multi;
+        if (mod && e.key.toLowerCase() === 'd' && multi.length) {
+          e.preventDefault();
+          let copies: Sel[] = [];
+          st.commit('Duplicate', (d) => { copies = duplicateSelection(d, multi, 0.5, 0.5); });
+          st.setUi({ selection: copies.at(-1) ?? null, multi: copies });
+          return;
+        }
+        if (mod && e.key.toLowerCase() === 'a') {
+          e.preventDefault();
+          const all = pickInRect(st.doc, st.ui.activeLevel, [-1e6, -1e6], [1e6, 1e6]);
+          st.setUi({ selection: all.at(-1) ?? null, multi: all });
+          return;
+        }
+        const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+        if (arrows[e.key] && multi.some((m) => isMovable(m.kind))) {
+          e.preventDefault();
+          const step = e.shiftKey ? 0.5 : st.ui.grid;
+          const [ax, az] = arrows[e.key];
+          st.commit('Nudge', (d) => translateSelection(d, multi.filter((m) => isMovable(m.kind)), ax * step, az * step));
+          return;
+        }
+      }
       if (mod) return;
       if (st.ui.mode === 'walk' || st.ui.mode === 'tour') return;
       const k = e.key.toLowerCase();
@@ -78,9 +103,9 @@ function useHotkeys() {
       else if (k === 't' && st.doc.journey.length) st.setUi({ mode: 'tour', tourIndex: 0 });
       else if (st.ui.mode === 'build' && TOOL_KEYS[k]) st.setUi({ tool: TOOL_KEYS[k] });
       else if (k === 'w' && st.ui.mode === 'explore') st.setUi({ mode: 'walk' });
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && st.ui.selection && st.ui.selection.kind !== 'levels') {
-        const sel = st.ui.selection;
-        st.commit('Delete', (d) => deleteEntity(d, sel.kind, sel.id));
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && st.ui.multi.length) {
+        const multi = st.ui.multi;
+        st.commit('Delete', (d) => deleteSelection(d, multi));
         st.setUi({ selection: null });
       } else if (e.key === 'Escape') st.setUi({ selection: null });
     };
@@ -118,6 +143,7 @@ function Lights() {
 export default function App() {
   const mode = useStore((s) => s.ui.mode);
   const dialog = useStore((s) => s.ui.dialog);
+  const loadId = useStore((s) => s.loadId);
   useAutosave();
   useHotkeys();
   useEffect(() => {
@@ -139,7 +165,7 @@ export default function App() {
           <Building />
           <Anchors />
           {mode === 'build' && <BuildLayer />}
-          <Cameras key={mode} />
+          <Cameras key={`${mode}-${loadId}`} />
         </Canvas>
         {mode === 'build' && <Toolbar />}
         {mode !== 'walk' && mode !== 'tour' && <LevelSwitcher />}
@@ -147,6 +173,8 @@ export default function App() {
         <AnchorCard />
         <TourControls />
         <WalkOverlay />
+        <ExploreControls />
+        <SheetToggle />
         <StatusBar />
       </main>
       {dialog === 'new' && <NewPalaceDialog />}

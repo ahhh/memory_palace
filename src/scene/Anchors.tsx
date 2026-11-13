@@ -42,7 +42,7 @@ export function Anchors() {
                 setUi({ openAnchor: a.id });
               }}
             >
-              <icosahedronGeometry args={[isSel ? 0.22 : 0.16, 1]} />
+              <icosahedronGeometry args={[isSel ? 0.15 : 0.11, 1]} />
               <meshStandardMaterial color={ORB} emissive={ORB} emissiveIntensity={isSel ? 1.6 : 0.8} toneMapped={false} />
             </mesh>
             <mesh position={[0, -a.pos[1] / 2, 0]}>

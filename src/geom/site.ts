@@ -115,8 +115,11 @@ export function buildTerrain(doc: PalaceDoc, height: HeightFn): THREE.BufferGeom
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const cols = new Float32Array(pos.count * 3);
   const grass = rgb(matColor(doc.site.ground)), grass2 = rgb('#93a96b'), dirt = rgb('#8a7a5e'), rock = rgb('#8c877c');
-  const waterYs = [...Object.values(doc.rivers).flatMap((r) => r.pts.map((p) => p[1])), ...Object.values(doc.ponds).map((p) => p.y)];
+  // Only rivers get earthy banks; ponds and fountains sit in lawns.
+  const waterYs = Object.values(doc.rivers).flatMap((r) => r.pts.map((p) => p[1]));
   const lowWater = waterYs.length ? Math.max(...waterYs) : -Infinity;
+  // The pad flattened under the house sits just below floor level; never tint it as a bank.
+  const padTop = (Object.values(doc.levels).find((l) => l.index === 0)?.elevation ?? 0) - 0.05;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
     const h = height(x, z);
@@ -126,7 +129,7 @@ export function buildTerrain(doc: PalaceDoc, height: HeightFn): THREE.BufferGeom
     const n = vnoise(x * 0.3, z * 0.3, 99);
     let c: [number, number, number] = n > 0.5 ? grass : grass2;
     if (slope > 0.9) c = rock;
-    else if (h < lowWater + 0.08 && waterYs.length) c = dirt;
+    else if (h < lowWater + 0.08 && h < padTop && waterYs.length) c = dirt;
     cols[i * 3] = c[0]; cols[i * 3 + 1] = c[1]; cols[i * 3 + 2] = c[2];
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));

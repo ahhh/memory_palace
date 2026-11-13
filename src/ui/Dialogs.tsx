@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { StyleId } from '../model/schema';
 import { useStore } from '../editor/store';
-import { LATEST, generate, paramsFor } from '../gen/registry';
+import { LATEST, SYMMETRIC_DEFAULT, generate, paramsFor } from '../gen/registry';
 import { sanitizeSeed } from '../share/recipeString';
 import { decodeShare, encodeShare, shareUrl } from '../share/codec';
 import { deleteFromLibrary, listLibrary, loadFromLibrary, newLibraryId, saveToLibrary, type LibraryEntry } from '../library/storage';
@@ -15,8 +15,16 @@ const STYLES: { id: StyleId; name: string; blurb: string }[] = [
 ];
 
 const PARAM_LABELS: Record<string, string> = { floors: 'Floors', bedrooms: 'Bedrooms', garage: 'Garage', corner: 'Corner unit', variant: 'Variant', court: 'Fountain court' };
-const VALUE_LABELS: Record<string, string> = { '0': 'No', '1': 'Yes', robie: 'Robie (long & low)', fallingwater: 'Fallingwater (over a stream)', usonian: 'Usonian (L around a pond)' };
+const VARIANT_LABELS: Record<string, string> = { robie: 'Robie (long & low)', fallingwater: 'Fallingwater (over a stream)', usonian: 'Usonian (L around a pond)' };
 const binary = new Set(['garage', 'corner', 'court']);
+/** Yes/No only for on/off options; counts like floors and bedrooms show their number. */
+const valueLabel = (k: string, v: string) => (binary.has(k) ? (v === '1' ? 'Yes' : 'No') : VARIANT_LABELS[v] ?? v);
+const SYM_NOTE: Record<StyleId, string> = {
+  family: 'Centered hall with mirrored rooms; no garage.',
+  condo: 'Living room centered between twin bedrooms.',
+  prairie: 'A Winslow-House-style plan: centered core, twin hearths, matching wings.',
+  mansion: 'Classical mirrored wings. Uncheck for a rambling, asymmetric palace.',
+};
 
 const WORDS_A = ['amber', 'quiet', 'silver', 'velvet', 'hidden', 'golden', 'misty', 'lunar', 'copper', 'ivory', 'cobalt', 'secret', 'wild', 'sunlit'];
 const WORDS_B = ['river', 'harbor', 'orchard', 'falcon', 'lantern', 'meadow', 'cedar', 'atlas', 'echo', 'garden', 'comet', 'fern', 'heron', 'quill'];
@@ -44,10 +52,18 @@ export function NewPalaceDialog() {
   const [style, setStyle] = useState<StyleId>('family');
   const [seed, setSeed] = useState(randomSeed());
   const [params, setParams] = useState<Record<string, string>>({});
+  const [furnished, setFurnished] = useState(true);
+  const [symmetric, setSymmetric] = useState(SYMMETRIC_DEFAULT.family);
   const close = () => setUi({ dialog: null });
   const spec = paramsFor(style);
+  // Fallingwater and Usonian are shaped by their site; symmetry doesn't apply to them.
+  const symApplies = !(style === 'prairie' && (params.variant === 'fallingwater' || params.variant === 'usonian'));
   const create = () => {
-    const recipe = { style, ver: LATEST[style]!, seed: sanitizeSeed(seed), params: Object.fromEntries(Object.entries(params).filter(([k, v]) => v && spec[k])) };
+    const chosen: Record<string, string> = Object.fromEntries(Object.entries(params).filter(([k, v]) => v && spec[k]));
+    // Only record options that differ from the defaults, so plain recipes stay short.
+    if (!furnished) chosen.furniture = '0';
+    if (symApplies && symmetric !== SYMMETRIC_DEFAULT[style]) chosen.symmetric = symmetric ? '1' : '0';
+    const recipe = { style, ver: LATEST[style]!, seed: sanitizeSeed(seed), params: chosen };
     const doc = generate(recipe);
     load(doc, null);
     history.replaceState(null, '', location.pathname + location.search);
@@ -57,7 +73,7 @@ export function NewPalaceDialog() {
     <Modal title="New palace" onClose={close}>
       <div className="styles">
         {STYLES.map((s) => (
-          <button key={s.id} className={`style-card${style === s.id ? ' on' : ''}`} onClick={() => { setStyle(s.id); setParams({}); }}>
+          <button key={s.id} className={`style-card${style === s.id ? ' on' : ''}`} onClick={() => { setStyle(s.id); setParams({}); setSymmetric(SYMMETRIC_DEFAULT[s.id]); }}>
             <b>{s.name}</b><span>{s.blurb}</span>
           </button>
         ))}
@@ -76,10 +92,20 @@ export function NewPalaceDialog() {
             <span>{PARAM_LABELS[k] ?? k}</span>
             <select value={params[k] ?? ''} onChange={(e) => setParams({ ...params, [k]: e.target.value })}>
               <option value="">Surprise me</option>
-              {values.map((v) => <option key={v} value={v}>{binary.has(k) ? VALUE_LABELS[v] : VALUE_LABELS[v] ?? v}</option>)}
+              {values.map((v) => <option key={v} value={v}>{valueLabel(k, v)}</option>)}
             </select>
           </label>
         ))}
+      </div>
+      <div className="gen-toggles">
+        <label className="toggle">
+          <input type="checkbox" checked={furnished} onChange={(e) => setFurnished(e.target.checked)} />
+          <span><b>Furniture</b><small>{furnished ? 'Rooms come furnished.' : 'Bare architecture: walls, doors and windows only.'}</small></span>
+        </label>
+        <label className={`toggle${symApplies ? '' : ' off'}`}>
+          <input type="checkbox" checked={symApplies && symmetric} disabled={!symApplies} onChange={(e) => setSymmetric(e.target.checked)} />
+          <span><b>Symmetric design</b><small>{symApplies ? SYM_NOTE[style] : 'Not available for this variant; it follows its site.'}</small></span>
+        </label>
       </div>
       <div className="modal-actions">
         <button onClick={() => { load(emptyDoc('Blank palace'), null); setUi({ dialog: null, mode: 'build', tool: 'room' }); }}>Start from a blank lot</button>
@@ -195,8 +221,14 @@ export function HelpDialog() {
         <li><b>Rehearse.</b> Tour flies you stop to stop (← →). Recall mode hides notes until you reveal them. Walk lets you wander (WASD + mouse).</li>
         <li><b>Share.</b> The link contains the whole palace; friends can open it, add anchors, and send back their own link.</li>
       </ol>
+      <h4>Camera keys</h4>
+      <p className="small">Explore: arrow keys pan across the grounds (↑ moves forward) · Shift+arrows orbit and tilt · Q/E turn · +/− zoom · Home resets the view. Build: arrows pan the plan when nothing is selected (and nudge the selection when something is).</p>
+      <h4>On a phone or tablet</h4>
+      <p className="small">Explore: drag to orbit, pinch to zoom, or tap the camera buttons. Walk: tap the floor to walk there, swipe to look, tap ▲ ↶ ↷ to step and turn. Tour: tap Next/Prev. ☰ Journey opens your loci. In Build, one finger uses the tool and two fingers pan and zoom.</p>
       <h4>Build mode keys</h4>
       <p className="small">V select · M room · L wall · D door · N window · H arch · F furnish · A anchor · X erase · R rotate · Esc cancel · Del delete · ⌘/Ctrl+Z undo · Shift+⌘/Ctrl+Z redo · right-drag pans · wheel zooms · Alt disables snapping</p>
+      <p className="small">Select: Shift-click adds to the selection · drag on empty floor to box-select · drag a selected item to move everything · drag the orange corner dots of a selected wall to reshape (joined walls and floors follow) · arrows nudge · ⌘/Ctrl+D duplicates · ⌘/Ctrl+A selects the whole floor.</p>
+      <p className="small muted">Detailed furniture models are CC0 from <a href="https://polyhaven.com" target="_blank" rel="noreferrer">Poly Haven</a>.</p>
     </Modal>
   );
 }

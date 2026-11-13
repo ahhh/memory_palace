@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>Generator determinism check</title></head>
+  <body>
+    <pre id="out">running…</pre>
+    <script type="module">
+      import { generate } from '../src/gen/registry';
+      import { fixtureKey, fixtureRecipes } from '../src/gen/fixtureRecipes';
+      import { docHash } from '../src/share/hash';
+      import { decodeShare } from '../src/share/codec';
+      import hashes from '../src/gen/__fixtures__/hashes.json';
+      import links from '../src/share/__fixtures__/links.txt?raw';
+      const bad = [];
+      let n = 0;
+      for (const r of fixtureRecipes()) {
+        const k = fixtureKey(r);
+        if (!hashes[k]) continue;
+        n++;
+        const h = docHash(generate(r));
+        if (h !== hashes[k]) bad.push(`${k}: ${h} != ${hashes[k]}`);
+      }
+      for (const row of links.split('\n').filter((l) => l && !l.startsWith('#'))) {
+        const [hash, code] = row.split(' ');
+        n++;
+        const h = docHash(await decodeShare(code));
+        if (h !== hash) bad.push(`link ${code.slice(0, 40)}…: ${h} != ${hash}`);
+      }
+      window.__result = { checked: n, bad, ua: navigator.userAgent };
+      document.getElementById('out').textContent = JSON.stringify(window.__result, null, 1);
+    </script>
+  </body>
+</html>

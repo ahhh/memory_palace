@@ -71,10 +71,21 @@ const BUILDERS: Record<string, [string, string, Builder]> = {
 
 /** Extra placeable items (not used by v1 generators): dims in cm like the frozen table. */
 const EXTRA_DIMS: Record<string, [number, number, number]> = {
+  rocking_chair: [75, 85, 100], folding_screen: [130, 40, 160], horse_statue: [60, 45, 150], marble_bust: [50, 50, 160],
+  mantel_clock: [50, 40, 115], lantern: [40, 40, 120], mirror: [70, 12, 180], gargoyle: [160, 160, 180],
   globe: [60, 60, 110], lamp: [40, 40, 160], clock: [50, 35, 210], urn: [60, 60, 100], crystal: [50, 50, 60],
   telescope: [70, 70, 150], easel: [70, 60, 170], skeleton: [50, 40, 170], suit_armor: [60, 50, 190], cauldron: [80, 80, 70],
 };
+const PLINTH = (w: number, h: number, d: number, top: Builder): Part[] => [box(0, h / 2, 0, w, h, d, '#e3ddd1'), ...top(w, h, d).map((p) => ({ ...p, p: [p.p[0], p.p[1] + h, p.p[2]] as [number, number, number] }))];
 const EXTRA_BUILDERS: Record<string, [string, string, Builder]> = {
+  rocking_chair: ['Rocking chair', 'Living', (w, h, d) => [box(0, 0.45, 0, w, 0.06, d, WOOD), box(0, 0.75, -d / 2 + 0.05, w, h - 0.5, 0.05, WOOD), box(-w / 2, 0.1, 0, 0.04, 0.06, d + 0.2, DARK), box(w / 2, 0.1, 0, 0.04, 0.06, d + 0.2, DARK)]],
+  folding_screen: ['Folding screen', 'Decor', (w, h, d) => [box(-w / 3, h / 2, 0, w / 3, h, 0.03, RED), box(0, h / 2, d / 3, w / 3, h, 0.03, GOLD), box(w / 3, h / 2, 0, w / 3, h, 0.03, RED)]],
+  horse_statue: ['Bronze horse', 'Curiosities', (w, _h, d) => PLINTH(w * 0.8, 1.0, d * 0.8, () => [box(0, 0.25, 0, 0.4, 0.3, 0.15, '#7a5a2e'), ball(0.2, 0.45, 0, 0.1, '#7a5a2e')])],
+  marble_bust: ['Marble bust', 'Curiosities', (w, _h, d) => PLINTH(w * 0.8, 1.05, d * 0.8, () => [box(0, 0.12, 0, 0.3, 0.24, 0.18, WHITE), ball(0, 0.38, 0, 0.13, WHITE)])],
+  mantel_clock: ['Mantel clock', 'Curiosities', (w, _h, d) => PLINTH(w * 0.8, 0.9, d * 0.8, () => [box(0, 0.12, 0, 0.32, 0.24, 0.12, DARK), cyl(0, 0.14, 0.07, 0.14, 0.01, WHITE)])],
+  lantern: ['Lantern', 'Curiosities', (w, _h, d) => PLINTH(w * 0.8, 0.9, d * 0.8, () => [box(0, 0.14, 0, 0.12, 0.26, 0.12, '#f4d27a')])],
+  mirror: ['Ornate mirror', 'Curiosities', (w, h, d) => [box(0, h / 2 + 0.4, 0, w, h - 0.8, d, GOLD), box(0, h / 2 + 0.4, d / 2, w - 0.1, h - 0.9, 0.01, '#d7e6ec')]],
+  gargoyle: ['Gothic statue', 'Curiosities', (w, h, d) => [box(0, 0.25, 0, w, 0.5, d, '#8c877c'), box(0, 0.5 + (h - 0.5) / 2, 0, w * 0.5, h - 0.5, d * 0.5, '#8c877c')]],
   globe: ['Globe', 'Memory props', (w, h) => [cyl(0, 0.4, 0, 0.12, 0.8, WOOD), ball(0, h - w / 2, 0, w / 2, '#5b8fb9')]],
   lamp: ['Floor lamp', 'Decor', (w, h) => [cyl(0, 0.02, 0, w * 0.7, 0.04, BLACK), cyl(0, h / 2, 0, 0.03, h, BLACK), cyl(0, h - 0.15, 0, w, 0.3, '#f6e8c2')]],
   clock: ['Grandfather clock', 'Memory props', (w, h, d) => [box(0, h / 2, 0, w, h, d, DARK), cyl(0, h - 0.4, d / 2, 0.36, 0.02, WHITE)]],
@@ -98,3 +109,40 @@ for (const [id, [label, group, build]] of Object.entries(EXTRA_BUILDERS)) {
 }
 
 export const CATALOG_GROUPS = [...new Set(Object.values(CATALOG).map((c) => c.group))];
+
+/**
+ * Detailed CC0 models from Poly Haven (polyhaven.com), optimized into public/models.
+ * Each model is fitted inside the item's footprint, so frozen generator layouts never change.
+ *  rot: turn (deg) so the model's front faces +z and its long side runs along x.
+ *  pedestal: draw a plinth this tall and set the model on top.
+ *  stretch: scale height freely to the item height (e.g. a cabinet used as a wardrobe).
+ */
+export interface ModelSpec { file: string; rot?: number; pedestal?: number; stretch?: boolean; lift?: number }
+export const MODELS: Record<string, ModelSpec> = {
+  sofa: { file: 'sofa_02' },
+  armchair: { file: 'ArmChair_01' },
+  coffee_table: { file: 'modern_coffee_table_01', rot: 90 },
+  nightstand: { file: 'ClassicNightstand_01' },
+  wardrobe: { file: 'painted_wooden_cabinet', stretch: true },
+  desk: { file: 'gallinera_table' },
+  chair: { file: 'dining_chair_02' },
+  dining_chair: { file: 'dining_chair_02' },
+  dining_table: { file: 'wooden_table_02' },
+  long_table: { file: 'painted_wooden_table' },
+  bookshelf: { file: 'wooden_bookshelf_worn' },
+  console: { file: 'ClassicConsole_01' },
+  sideboard: { file: 'GothicCommode_01' },
+  bed_double: { file: 'GothicBed_01' },
+  bed_single: { file: 'vintage_day_bed', rot: 90 },
+  bench: { file: 'painted_wooden_bench' },
+  statue: { file: 'marble_bust_01', pedestal: 1.3 },
+  rocking_chair: { file: 'Rockingchair_01' },
+  folding_screen: { file: 'chinese_screen_panels' },
+  horse_statue: { file: 'horse_statue_01', pedestal: 1.0 },
+  marble_bust: { file: 'marble_bust_01', pedestal: 1.05 },
+  mantel_clock: { file: 'mantel_clock_01', pedestal: 0.9 },
+  lantern: { file: 'Lantern_01', pedestal: 0.9 },
+  mirror: { file: 'ornate_mirror_01', lift: 0.5 },
+  gargoyle: { file: 'gothic_statue' },
+};
+export const modelUrl = (file: string) => `${import.meta.env.BASE_URL}models/${file}.glb`;

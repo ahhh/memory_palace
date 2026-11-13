@@ -5,23 +5,25 @@ import { useStore } from '../editor/store';
 import { buildLevelMeshes } from '../geom/levelMesh';
 import { buildRoofs } from '../geom/roofMesh';
 import { glassMat, roofMat, solidMat } from './materials';
+import { FurnitureModels, hasModel } from './FurnitureModels';
 import { useActiveLevel, useBounds, useLevels } from './hooks';
 import { byLevel, roomsBesideWall, wallLength, wallNormal, wallPoint } from '../model/queries';
 
 function LevelView({ level, cut, allCut }: { level: Level; cut?: Set<Id>; allCut?: boolean }) {
   const doc = useStore((s) => s.doc);
+  const detailed = useStore((s) => s.ui.detailed);
   const deps = [doc.walls, doc.openings, doc.rooms, doc.slabs, doc.stairs, doc.masses, doc.furniture, doc.levels, level];
   const cutKey = allCut ? 'all' : cut ? [...cut].sort().join(',') : '';
   const meshes = useMemo(
-    () => buildLevelMeshes(useStore.getState().doc, level, { cut, allCut, cutHeight: 0.45 }),
-     
-    [...deps, cutKey],
+    () => buildLevelMeshes(useStore.getState().doc, level, { cut, allCut, cutHeight: 0.45, skipCat: detailed ? hasModel : undefined }),
+    [...deps, cutKey, detailed],
   );
   useEffect(() => () => { meshes.solid.dispose(); meshes.glass.dispose(); }, [meshes]);
   return (
     <group>
       <mesh geometry={meshes.solid} material={solidMat} castShadow receiveShadow />
       <mesh geometry={meshes.glass} material={glassMat} renderOrder={2} />
+      {detailed && <FurnitureModels level={level} />}
     </group>
   );
 }
